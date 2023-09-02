@@ -106,7 +106,7 @@ class UsbIrService private constructor(
             )
             else listOf(
                 2,                              // buf[0] const. ReportId = 2
-                (10 + bytes.size).toByte(),     //  buf[1] packet size
+                (5 + bytes.size).toByte(),     //  buf[1] packet size
                 cmdUsbPackId,                   // buf[2]
                 fragmentCount,                  // buf[3]
                 (index + 1).toByte(),           // buf[4] fragment Cnt
