@@ -17,6 +17,7 @@ fun interface IIrService {
     fun transmit(freq: Int, pattern: IntArray)
 }
 
+// By WasiliySoft 02.09.2023 v1.0.0
 class UsbIrService private constructor(
     private val mConnection: UsbDeviceConnection,
     private val epOUT: UsbEndpoint,
