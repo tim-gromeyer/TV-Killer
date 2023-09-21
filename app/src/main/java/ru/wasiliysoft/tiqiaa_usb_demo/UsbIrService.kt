@@ -17,7 +17,7 @@ fun interface IIrService {
     fun transmit(freq: Int, pattern: IntArray)
 }
 
-// By WasiliySoft 02.09.2023 v1.0.0
+// By WasiliySoft 21.09.2023 v1.1.0
 class UsbIrService private constructor(
     private val mConnection: UsbDeviceConnection,
     private val epOUT: UsbEndpoint,
@@ -76,64 +76,58 @@ class UsbIrService private constructor(
     }
 
     override fun transmit(freq: Int, pattern: IntArray) {
-        val toBulk = mutableListOf<List<Byte>>()
 
-        // Settings blaster state Start
-        val toSendState: List<Byte> =
-            listOf(2, 9, getUsbPackId(), 1, 1, 83, 84, getCmdId(), 83, 69, 78)
-        toBulk.add(toSendState)
-
-        val tqIrWriteData = consumeIrToByteCode(pattern).apply {
-            add(69)
-            add(78)
-        }.chunked(49)
-
+        val tqIrWriteFragments = mutableListOf<Byte>().apply {
+            add(83)                                 // const. S
+            add(84)                                 // const. T
+            add(getCmdId())                         // cmdId
+            add(68)                                 // D - Transfer mode
+            add(0)                                  // freq - ignored, not worked
+            addAll(consumeIrToByteCode(pattern))    // payload
+            add(69)                                 // const. E
+            add(78)                                 // const. N
+        }.chunked(56)                           // max payload size 61 byte (-5 bit header)
 
         val cmdUsbPackId = getUsbPackId()
-        val fragmentCount = tqIrWriteData.size.toByte()
-        var f: List<Byte>
-        tqIrWriteData.forEachIndexed { index, bytes ->
-            f = if (index == 0) listOf(
-                2,                              // buf[0] const. ReportId = 2
-                (10 + bytes.size).toByte(),     // buf[1] packet size
-                cmdUsbPackId,                   // buf[2]
-                fragmentCount,                  // buf[3]
-                1,                              // buf[4] fragment Cnt
-                83,                             // const. S
-                84,                             // const. T
-                getCmdId(),                     // cmdId
-                68,                             // const. D
-                0                               // freq - not worked
-            )
-            else listOf(
-                2,                              // buf[0] const. ReportId = 2
-                (5 + bytes.size).toByte(),     //  buf[1] packet size
-                cmdUsbPackId,                   // buf[2]
-                fragmentCount,                  // buf[3]
-                (index + 1).toByte(),           // buf[4] fragment Cnt
-            )
-            f = f.plus(bytes)
-            toBulk.add(f)
+        val fragmentCount = tqIrWriteFragments.size
+        val toTransfer = mutableListOf<List<Byte>>()
+
+        tqIrWriteFragments.forEachIndexed { index, fragment ->
+            val fragmentHeader = listOf(
+                2,                  // buf[0] const. ReportId = 2
+                fragment.size + 3,  // buf[1] packet size
+                cmdUsbPackId,       // buf[2] cmd id
+                fragmentCount,      // buf[3] total fragment count
+                index + 1,          // buf[4] fragment id always > 0
+            ).map { it.toByte() }
+
+            toTransfer.add(fragmentHeader.plus(fragment))
         }
 
-        // Settings blaster state Idle
-        val toIdleState: List<Byte> =
-            listOf(2, 9, getUsbPackId(), 1, 1, 83, 84, getCmdId(), 76, 69, 78)
-        toBulk.add(toIdleState)
-
-        toBulk.forEach {
+        toReady()
+        toTransfer.forEach {
 //            Log.d("bulkTransfer", it.toString())
             bulkTransfer(it)
         }
+        toSleep()
+    }
+
+    private fun toReady() {
+        bulkTransfer(byteArrayOf(2, 9, getUsbPackId(), 1, 1, 83, 84, getCmdId(), 83, 69, 78).toList()) // S - SendMode
+    }
+
+    private fun toSleep() {
+        bulkTransfer(byteArrayOf(2, 9, getUsbPackId(), 1, 1, 83, 84, getCmdId(), 76, 69, 78).toList()) // L -  IdleMode
     }
 
     private fun bulkTransfer(data: List<Byte>) {
-        val byteWrite = ByteArray(61)
-        data.forEachIndexed { i, v -> byteWrite[i] = v }
+        val byteWrite = data.toByteArray()
         try {
-            mConnection.bulkTransfer(epOUT, byteWrite, byteWrite.size, 100)
+//            Log.d(LOG_TAG, "byteWrite ${byteWrite.toList()}")
+            mConnection.bulkTransfer(epOUT, byteWrite, byteWrite.size, 250)
             val bytesRead = ByteArray(epIN.maxPacketSize)
-            mConnection.bulkTransfer(epIN, bytesRead, bytesRead.size, 100)
+            mConnection.bulkTransfer(epIN, bytesRead, bytesRead.size, 250)
+//            Log.d(LOG_TAG, "bytesRead ${bytesRead.toList()}")
         } catch (e: Exception) {
             Log.e(LOG_TAG, e.message.toString())
             e.printStackTrace()
