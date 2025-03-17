@@ -13,16 +13,11 @@ private const val LOG_TAG = "UsbIrService"
 
 const val ACTION_USB_PERMISSION = "ru.wasiliysoft.tiqiaa.USB_PERMISSION"
 
-fun interface IIrService {
-    fun transmit(freq: Int, pattern: IntArray)
-}
-
 // By WasiliySoft 21.09.2023 v1.1.0
 class UsbIrService private constructor(
     private val mConnection: UsbDeviceConnection,
     private val epOUT: UsbEndpoint,
-    private val epIN: UsbEndpoint,
-) : IIrService {
+) {
     companion object {
         private var INSTANCE: UsbIrService? = null
 
@@ -38,9 +33,12 @@ class UsbIrService private constructor(
             return _usbPackCnt
         }
 
-        fun getInstance(usbManager: UsbManager, device: UsbDevice): IIrService? {
+        fun getInstance(usbManager: UsbManager, device: UsbDevice): UsbIrService? {
+            if (INSTANCE != null && !usbManager.deviceList.containsValue(device)) {
+                INSTANCE?.close() // Close if device no longer exists
+            }
+
             if (INSTANCE == null && isCompatibleDevice(device)) {
-                var endpointIN: UsbEndpoint? = null
                 var endpointOUT: UsbEndpoint? = null
                 val usbInterface = device.getInterface(0)
 
@@ -48,7 +46,6 @@ class UsbIrService private constructor(
                     usbInterface.getEndpoint(i).let { endpoint ->
                         if (endpoint.type == UsbConstants.USB_ENDPOINT_XFER_BULK) {
                             when (endpoint.direction) {
-                                UsbConstants.USB_DIR_IN -> endpointIN = endpoint
                                 UsbConstants.USB_DIR_OUT -> endpointOUT = endpoint
                                 else -> Log.e(LOG_TAG, "undefined endpoints direction")
                             }
@@ -56,37 +53,42 @@ class UsbIrService private constructor(
                     }
                 }
 
-                if (endpointIN == null || endpointOUT == null) {
+                if (endpointOUT == null) {
                     Log.e(LOG_TAG, "Failed setting endpoint")
                     INSTANCE = null
-                    return INSTANCE
+                    return null
                 }
 
                 val connection = usbManager.openDevice(device)
                 if (connection == null || !connection.claimInterface(usbInterface, true)) {
                     Log.e(LOG_TAG, "open device FAIL!")
                     INSTANCE = null
-                    return INSTANCE
+                    return null
                 }
                 Log.d(LOG_TAG, "open device SUCCESS!")
-                INSTANCE = UsbIrService(connection, endpointOUT!!, endpointIN!!)
+                INSTANCE = UsbIrService(connection, endpointOUT!!)
             }
             return INSTANCE
         }
     }
 
-    override fun transmit(freq: Int, pattern: IntArray) {
+    fun transmit(freq: Int, pattern: IntArray) {
+        val maxPayloadPerFragment = epOUT.maxPacketSize - 5
+        if (maxPayloadPerFragment <= 0) {
+            Log.e(LOG_TAG, "Invalid maxPayloadPerFragment: $maxPayloadPerFragment")
+            return
+        }
 
         val tqIrWriteFragments = mutableListOf<Byte>().apply {
             add(83)                                 // const. S
             add(84)                                 // const. T
             add(getCmdId())                         // cmdId
             add(68)                                 // D - Transfer mode
-            add(0)                                  // freq - ignored, not worked
+            add((freq / 1000).toByte())             // Replace '0' with freq converted appropriately
             addAll(consumeIrToByteCode(pattern))    // payload
             add(69)                                 // const. E
             add(78)                                 // const. N
-        }.chunked(56)                           // max payload size 61 byte (-5 bit header)
+        }.chunked(maxPayloadPerFragment)            // Increase chunk size to reduce number of fragments
 
         val cmdUsbPackId = getUsbPackId()
         val fragmentCount = tqIrWriteFragments.size
@@ -95,7 +97,7 @@ class UsbIrService private constructor(
         tqIrWriteFragments.forEachIndexed { index, fragment ->
             val fragmentHeader = listOf(
                 2,                  // buf[0] const. ReportId = 2
-                fragment.size + 3,  // buf[1] packet size
+                fragment.size + 3,  // buf[1] packet size (payload size + 3 header bytes)
                 cmdUsbPackId,       // buf[2] cmd id
                 fragmentCount,      // buf[3] total fragment count
                 index + 1,          // buf[4] fragment id always > 0
@@ -106,7 +108,6 @@ class UsbIrService private constructor(
 
         toReady()
         toTransfer.forEach {
-//            Log.d("bulkTransfer", it.toString())
             bulkTransfer(it)
         }
         toSleep()
@@ -123,15 +124,23 @@ class UsbIrService private constructor(
     private fun bulkTransfer(data: List<Byte>) {
         val byteWrite = data.toByteArray()
         try {
-//            Log.d(LOG_TAG, "byteWrite ${byteWrite.toList()}")
-            mConnection.bulkTransfer(epOUT, byteWrite, byteWrite.size, 250)
-            val bytesRead = ByteArray(epIN.maxPacketSize)
-            mConnection.bulkTransfer(epIN, bytesRead, bytesRead.size, 250)
-//            Log.d(LOG_TAG, "bytesRead ${bytesRead.toList()}")
+            val result = mConnection.bulkTransfer(epOUT, byteWrite, byteWrite.size, 250)
+            println("$result bytes written " + (byteWrite.size == result))
+            if (result != byteWrite.size) {
+                Log.e(LOG_TAG, "Bulk transfer failed, device may be disconnected")
+                close()
+            }
         } catch (e: Exception) {
-            Log.e(LOG_TAG, e.message.toString())
-            e.printStackTrace()
+            Log.e(LOG_TAG, "Bulk transfer exception: ${e.message}")
+            close()
+            throw e
         }
+    }
+
+    fun close() {
+        mConnection.close()
+        INSTANCE = null
+        Log.d(LOG_TAG, "UsbIrService closed")
     }
 }
 
