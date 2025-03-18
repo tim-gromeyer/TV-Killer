@@ -74,7 +74,6 @@ class TiqiaaUsbDriver(private val context: Context) {
         val usbInterface = device!!.getInterface(0)
         connection!!.claimInterface(usbInterface, true)
 
-        // Find bulk endpoints
         for (i in 0 until usbInterface.endpointCount) {
             val endpoint = usbInterface.getEndpoint(i)
             if (endpoint.type == UsbConstants.USB_ENDPOINT_XFER_BULK) {
@@ -91,7 +90,7 @@ class TiqiaaUsbDriver(private val context: Context) {
             return false
         }
 
-        // Initialize device by sending idle and send mode commands
+        Log.d(TAG, "USB initialization successful, sending initial commands")
         return sendCmd(CMD_IDLE_MODE, getCmdId()) && sendCmd(CMD_SEND_MODE, getCmdId())
     }
 
@@ -104,6 +103,7 @@ class TiqiaaUsbDriver(private val context: Context) {
         connection?.close()
         connection = null
         device = null
+        Log.d(TAG, "USB driver deinitialized")
     }
 
     /**
@@ -112,43 +112,51 @@ class TiqiaaUsbDriver(private val context: Context) {
      * @param pulses List of pulse and space durations in microseconds (alternating pulse, space)
      */
     fun sendIrSignal(freq: Int, pulses: List<Int>): Boolean {
-        val buf = ByteArray(128) // Buffer size should be sufficient for typical IR signals
+        Log.d(TAG, "sendIrSignal called with freq=$freq, pulses=${pulses.size} elements")
+        // Reset to idle and send mode before each IR signal
+        if (!sendCmd(CMD_IDLE_MODE, getCmdId()) || !sendCmd(CMD_SEND_MODE, getCmdId())) {
+            Log.e(TAG, "Failed to reset device state before sending IR signal")
+            return false
+        }
+        Log.d(TAG, "Device reset to idle and send mode")
+
+        val buf = ByteArray(128)
         var bufSize = 0
 
         for (i in pulses.indices step 2) {
             val pulse = pulses[i]
             val space = if (i + 1 < pulses.size) pulses[i + 1] else 0
+            Log.v(TAG, "Processing pulse=$pulse, space=$space at index $i")
             bufSize = writePulse(buf, bufSize, true, pulse)
             if (bufSize < 0) {
-                Log.e(TAG, "Buffer overflow while writing pulse")
+                Log.e(TAG, "Buffer overflow while writing pulse at index $i")
                 return false
             }
             if (space > 0) {
                 bufSize = writePulse(buf, bufSize, false, space)
                 if (bufSize < 0) {
-                    Log.e(TAG, "Buffer overflow while writing space")
+                    Log.e(TAG, "Buffer overflow while writing space at index ${i + 1}")
                     return false
                 }
             }
         }
 
+        Log.d(TAG, "Pulse buffer prepared, size=$bufSize")
         return sendIr(freq, buf, bufSize)
     }
 
-    // Private helper functions
-
     private fun findDevice(): UsbDevice? {
         val deviceList = usbManager.deviceList
-        return deviceList.values.find { device ->
+        val foundDevice = deviceList.values.find { device ->
             compatibleDevices.any { it.vendor == device.vendorId && it.product == device.productId }
         }
+        Log.d(TAG, "findDevice: ${if (foundDevice != null) "Device found" else "No device found"}")
+        return foundDevice
     }
 
     private fun requestPermission(): Boolean {
         val permissionIntent = PendingIntent.getBroadcast(
-            context,
-            0,
-            Intent(ACTION_USB_PERMISSION),
+            context, 0, Intent(ACTION_USB_PERMISSION),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
         )
         val latch = CountDownLatch(1)
@@ -158,6 +166,7 @@ class TiqiaaUsbDriver(private val context: Context) {
             override fun onReceive(context: Context, intent: Intent) {
                 if (ACTION_USB_PERMISSION == intent.action && device != null) {
                     permissionGranted = usbManager.hasPermission(device)
+                    Log.d(TAG, "Permission request result: $permissionGranted")
                     latch.countDown()
                 }
             }
@@ -165,11 +174,10 @@ class TiqiaaUsbDriver(private val context: Context) {
 
         context.registerReceiver(receiver, IntentFilter(ACTION_USB_PERMISSION))
         usbManager.requestPermission(device, permissionIntent)
+        Log.d(TAG, "Permission requested for device")
 
-        // Wait for permission result with a timeout
         latch.await(10, TimeUnit.SECONDS)
         context.unregisterReceiver(receiver)
-
         return permissionGranted
     }
 
@@ -179,7 +187,7 @@ class TiqiaaUsbDriver(private val context: Context) {
         } else {
             cmdId = 1
             cmdId.toByte()
-        }
+        }.also { Log.v(TAG, "Generated cmdId: $it") }
     }
 
     private fun sendCmd(cmdType: Byte, cmdId: Byte): Boolean {
@@ -191,6 +199,7 @@ class TiqiaaUsbDriver(private val context: Context) {
             this[4] = (PACK_END_SIGN and 0xFF).toByte()
             this[5] = (PACK_END_SIGN shr 8).toByte()
         }
+        Log.d(TAG, "Sending command type=$cmdType, cmdId=$cmdId")
         return sendReport2(pack, pack.size)
     }
 
@@ -205,17 +214,19 @@ class TiqiaaUsbDriver(private val context: Context) {
         }
         if (bufIndex >= buf.size) return -1
         buf[bufIndex] = ((if (isOn) 128 else 0) + pulseLength).toByte()
+        Log.v(TAG, "writePulse: isOn=$isOn, duration=$duration, bufIndex=$bufIndex")
         return bufIndex + 1
     }
 
     private fun sendIr(freq: Int, buffer: ByteArray, bufSize: Int): Boolean {
         val cmdId = getCmdId()
+        Log.d(TAG, "sendIr: freq=$freq, bufSize=$bufSize, cmdId=$cmdId")
         return sendIrCmd(freq, buffer, bufSize, cmdId)
     }
 
     private fun sendIrCmd(freq: Int, buffer: ByteArray, bufSize: Int, cmdId: Byte): Boolean {
         val packBuf = ByteArray(1024)
-        val packHeaderSize = 5 // start_sign (2), cmd_id (1), cmd_type (1), ir_freq_id (1)
+        val packHeaderSize = 5
 
         if (bufSize < 0 || bufSize + packHeaderSize + 2 > MAX_USB_PACKET_SIZE) {
             Log.e(TAG, "Invalid IR buffer size: $bufSize")
@@ -223,9 +234,12 @@ class TiqiaaUsbDriver(private val context: Context) {
         }
 
         val irFreqId: Byte = if (freq > 255) {
-            tiqIrFreqTable.indexOf(freq).toByte().takeIf { it >= 0 } ?: return false
+            tiqIrFreqTable.indexOf(freq).toByte().takeIf { it >= 0 } ?: 0
         } else {
-            if (freq < tiqIrFreqTable.size) freq.toByte() else return false
+            if (freq < tiqIrFreqTable.size) freq.toByte() else run {
+                Log.e(TAG, "Invalid frequency index $freq")
+                return false
+            }
         }
 
         packBuf[0] = (PACK_START_SIGN and 0xFF).toByte()
@@ -238,6 +252,7 @@ class TiqiaaUsbDriver(private val context: Context) {
         packBuf[packSize] = (PACK_END_SIGN and 0xFF).toByte()
         packBuf[packSize + 1] = (PACK_END_SIGN shr 8).toByte()
 
+        Log.d(TAG, "sendIrCmd: prepared packet, size=${packSize + 2}, freqId=$irFreqId")
         return sendReport2(packBuf, packSize + 2)
     }
 
@@ -251,25 +266,30 @@ class TiqiaaUsbDriver(private val context: Context) {
         packetIdx = (packetIdx % MAX_USB_PACKET_IDX) + 1
         var rdPtr = 0
 
+        Log.d(TAG, "sendReport2: size=$size, fragCount=$fragCount, packetIdx=$packetIdx")
+
         for (fragIdx in 1..fragCount) {
             val fragSize = minOf(size - rdPtr, MAX_USB_FRAG_SIZE)
             val fragBuf = ByteArray(61).apply {
                 this[0] = WRITE_REPORT_ID.toByte()
-                this[1] = (fragSize + 3).toByte() // frag_size includes header overhead
+                this[1] = (fragSize + 3).toByte()
                 this[2] = packetIdx.toByte()
                 this[3] = fragCount.toByte()
                 this[4] = fragIdx.toByte()
                 System.arraycopy(data, rdPtr, this, 5, fragSize)
             }
 
+            Log.v(TAG, "Sending fragment $fragIdx/$fragCount, size=${5 + fragSize}")
             val bytesWritten = connection!!.bulkTransfer(endpointOut, fragBuf, 5 + fragSize, 0)
             if (bytesWritten < 0) {
-                Log.e(TAG, "Bulk transfer failed: $bytesWritten")
+                Log.e(TAG, "Bulk transfer failed for fragment $fragIdx: $bytesWritten")
                 return false
             }
+            Log.d(TAG, "Fragment $fragIdx sent, bytesWritten=$bytesWritten")
             rdPtr += fragSize
         }
 
+        Log.d(TAG, "All fragments sent, awaiting response")
         return recResponse()
     }
 
@@ -278,10 +298,11 @@ class TiqiaaUsbDriver(private val context: Context) {
         var fragCount = 1
         var fragIdx = 0
 
+        Log.d(TAG, "recResponse: starting response reception")
         while (fragIdx < fragCount) {
             val bytesRead = connection!!.bulkTransfer(endpointIn, fragBuf, fragBuf.size, 500)
             if (bytesRead < 0) {
-                Log.e(TAG, "Error receiving response: $bytesRead")
+                Log.e(TAG, "Error receiving response fragment ${fragIdx + 1}: $bytesRead")
                 return false
             }
             if (bytesRead >= 5) {
@@ -289,9 +310,12 @@ class TiqiaaUsbDriver(private val context: Context) {
                 val fragIdxFromHeader = fragBuf[4].toInt() and 0xFF
                 if (fragIdx == 0) fragCount = fragCountFromHeader
                 fragIdx++
-                Log.d(TAG, "Received frag $fragIdxFromHeader of $fragCount, size: $bytesRead")
+                Log.d(TAG, "Received frag $fragIdxFromHeader/$fragCount, size=$bytesRead")
+            } else {
+                Log.w(TAG, "Received incomplete fragment, size=$bytesRead")
             }
         }
+        Log.d(TAG, "recResponse: all fragments received successfully")
         return true
     }
 }
