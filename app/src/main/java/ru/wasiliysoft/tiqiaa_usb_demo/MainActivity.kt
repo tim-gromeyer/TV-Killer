@@ -7,7 +7,6 @@ import android.content.IntentFilter
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
 import android.os.Bundle
-import android.os.Parcelable
 import android.view.View
 import android.widget.Button
 import android.widget.ProgressBar
@@ -17,12 +16,11 @@ import androidx.appcompat.app.AppCompatActivity
 import com.google.gson.Gson
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.io.IOException
 
 class MainActivity : AppCompatActivity() {
-    private var irService: UsbIrService? = null
+    private var tiqiaaDriver: TiqiaaUsbDriver? = null
     private val usbManager: UsbManager by lazy { getSystemService(USB_SERVICE) as UsbManager }
     private lateinit var usbBroadCastReceiver: BroadcastReceiver
     private lateinit var irPatterns: List<IrPattern>
@@ -45,7 +43,7 @@ class MainActivity : AppCompatActivity() {
             sendAllPatterns()
         }
 
-        initIrBlaster()
+        initTiqiaaDriver()
     }
 
     private fun loadPatternsFromJson() {
@@ -74,6 +72,11 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
+        if (tiqiaaDriver == null) {
+            Toast.makeText(this, "Tiqiaa USB driver not initialized", Toast.LENGTH_SHORT).show()
+            return
+        }
+
         CoroutineScope(Dispatchers.Main).launch {
             progressBar.visibility = View.VISIBLE
             progressBar.progress = 0
@@ -81,29 +84,39 @@ class MainActivity : AppCompatActivity() {
 
             var currentProgress = 0
 
-            // Send all regular patterns
             irPatterns.forEach { irPattern ->
                 irPattern.patterns.forEach { pattern ->
-                    val startTime = System.currentTimeMillis()
-                    irService?.transmit(pattern.frequency, pattern.pattern)
-                    val duration = System.currentTimeMillis() - startTime
-                    currentProgress++
-                    progressBar.progress = currentProgress
-                    patternsCountText.text = "Send packet number $currentProgress, took $duration ms"
+                    try {
+                        val startTime = System.currentTimeMillis()
+                        val success = tiqiaaDriver!!.sendIrSignal(pattern.frequency, pattern.pattern.toList())
+                        if (!success) throw Exception("Failed to send IR signal")
+                        val duration = System.currentTimeMillis() - startTime
+                        currentProgress++
+                        progressBar.progress = currentProgress
+                        patternsCountText.text = "Send packet number $currentProgress, took $duration ms"
+                    } catch (e: Exception) {
+                        Toast.makeText(this@MainActivity, "Transmission failed: ${e.message}", Toast.LENGTH_SHORT).show()
+                        return@launch
+                    }
                 }
             }
 
             Toast.makeText(this@MainActivity, "Finished transmitting all patterns", Toast.LENGTH_SHORT).show()
-            progressBar.visibility = View.GONE
         }
+        progressBar.visibility = View.GONE
     }
 
-    private fun initIrBlaster() {
+    private fun initTiqiaaDriver() {
         usbBroadCastReceiver = registerReceivers()
+        tiqiaaDriver = TiqiaaUsbDriver(this)
         if (usbManager.deviceList.isNotEmpty()) {
-            requestUsbPermissionForCompatibleDev(this, usbManager)
+            if (tiqiaaDriver!!.init()) {
+                Toast.makeText(this, "Tiqiaa USB driver initialized", Toast.LENGTH_SHORT).show()
+            } else {
+                Toast.makeText(this, "Failed to initialize Tiqiaa USB driver", Toast.LENGTH_LONG).show()
+            }
         } else {
-            Toast.makeText(this, "insert tiqiaa usb ir blaster", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, "Insert Tiqiaa USB IR blaster", Toast.LENGTH_LONG).show()
         }
     }
 
@@ -112,7 +125,7 @@ class MainActivity : AppCompatActivity() {
         arrayOf(
             IntentFilter(UsbManager.ACTION_USB_DEVICE_ATTACHED),
             IntentFilter(UsbManager.ACTION_USB_DEVICE_DETACHED),
-            IntentFilter(ACTION_USB_PERMISSION)
+            IntentFilter(TiqiaaUsbDriver.ACTION_USB_PERMISSION)
         ).map { registerReceiver(usbBroadCastReceiver, it) }
         return usbBroadCastReceiver
     }
@@ -122,23 +135,27 @@ class MainActivity : AppCompatActivity() {
             when (intent.action) {
                 UsbManager.ACTION_USB_DEVICE_ATTACHED -> {
                     Toast.makeText(context, "USB device inserted", Toast.LENGTH_SHORT).show()
-                    requestUsbPermissionForCompatibleDev(applicationContext, usbManager)
+                    if (tiqiaaDriver == null) tiqiaaDriver = TiqiaaUsbDriver(context)
+                    if (tiqiaaDriver!!.init()) {
+                        Toast.makeText(context, "Tiqiaa USB driver initialized", Toast.LENGTH_SHORT).show()
+                    } else {
+                        Toast.makeText(context, "Failed to initialize Tiqiaa USB driver", Toast.LENGTH_LONG).show()
+                    }
                 }
                 UsbManager.ACTION_USB_DEVICE_DETACHED -> {
-                    irService?.close()
-                    irService = null
+                    tiqiaaDriver?.deinit()
+                    tiqiaaDriver = null
                     Toast.makeText(context, "USB device removed", Toast.LENGTH_SHORT).show()
                 }
-                ACTION_USB_PERMISSION -> {
+                TiqiaaUsbDriver.ACTION_USB_PERMISSION -> {
                     synchronized(this) {
-                        val device = intent.getParcelableExtra<Parcelable>("device") as UsbDevice?
-                        if (intent.getBooleanExtra("permission", false) && device != null) {
-                            try {
-                                irService = UsbIrService.getInstance(usbManager, device)
-                                Toast.makeText(context, "USB device permission granted", Toast.LENGTH_SHORT).show()
-                            } catch (e: IOException) {
-                                e.printStackTrace()
-                                Toast.makeText(context, "Failed to initialize USB device", Toast.LENGTH_LONG).show()
+                        val device = intent.getParcelableExtra<UsbDevice>(UsbManager.EXTRA_DEVICE)
+                        if (intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false) && device != null) {
+                            if (tiqiaaDriver == null) tiqiaaDriver = TiqiaaUsbDriver(context)
+                            if (tiqiaaDriver!!.init()) {
+                                Toast.makeText(context, "USB device permission granted and driver initialized", Toast.LENGTH_SHORT).show()
+                            } else {
+                                Toast.makeText(context, "Failed to initialize USB driver after permission", Toast.LENGTH_LONG).show()
                             }
                         } else {
                             Toast.makeText(context, "USB permission denied", Toast.LENGTH_LONG).show()
@@ -151,6 +168,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        tiqiaaDriver?.deinit()
         if (this::usbBroadCastReceiver.isInitialized) {
             try {
                 unregisterReceiver(usbBroadCastReceiver)

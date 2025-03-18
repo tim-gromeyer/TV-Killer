@@ -7,54 +7,79 @@ import android.content.Intent
 import android.hardware.usb.*
 import android.os.Build
 import android.util.Log
+import ru.wasiliysoft.tiqiaa_usb_demo.TiqiaaUsbDriver.Companion.ACTION_USB_PERMISSION
+import java.nio.ByteBuffer
 
-private const val LOG_TAG = "UsbIrService"
+const val LOG_TAG = "UsbIrService"
+// const val ACTION_USB_PERMISSION = "ru.wasiliysoft.tiqiaa.USB_PERMISSION"
 
-const val ACTION_USB_PERMISSION = "ru.wasiliysoft.tiqiaa.USB_PERMISSION"
-
-// By WasiliySoft 21.09.2023 v1.1.0
+/**
+ * A service class to control a USB IR blaster on Android.
+ * Manages device communication and IR signal transmission.
+ */
 class UsbIrService private constructor(
     private val mConnection: UsbDeviceConnection,
     private val epOUT: UsbEndpoint,
+    private val epIN: UsbEndpoint
 ) {
     companion object {
         private var INSTANCE: UsbIrService? = null
+        private const val MAX_PACKET_SIZE = 1024
+        private const val MAX_FRAG_SIZE = 56
+        private const val MAX_CMD_ID = 127
+        private const val MAX_PACKET_IDX = 15
+        private const val IR_TICK_SIZE = 16 // 16 microseconds per tick
+        private const val MAX_IR_BLOCK_SIZE = 127 // Maximum ticks per block
 
-        private var _usbPackCnt: Byte = 1
-        private var _cmdCnt: Byte = 0
+        private var cmdId: Byte = 1
+        private var packetIdx: Byte = 0
+
+        /** Frequency table for IR transmission */
+        private val tiqIrFreqTable = intArrayOf(
+            38000, 37900, 37917, 36000, 40000, 39700, 35750, 36400, 36700, 37000,
+            37700, 38380, 38400, 38462, 38740, 39200, 42000, 43600, 44000, 33000,
+            33500, 34000, 34500, 35000, 40500, 41000, 41500, 42500, 43000, 45000
+        )
+
+        /** Generates a unique command ID */
         fun getCmdId(): Byte {
-            if (_cmdCnt < 127) _cmdCnt++ else _cmdCnt = 1
-            return _cmdCnt
+            if (cmdId < MAX_CMD_ID) cmdId++ else cmdId = 1
+            return cmdId
         }
 
-        fun getUsbPackId(): Byte {
-            if (_usbPackCnt < 15) _usbPackCnt++ else _usbPackCnt = 1
-            return _usbPackCnt
+        /** Generates a unique packet index */
+        fun getPacketIdx(): Byte {
+            if (packetIdx < MAX_PACKET_IDX) packetIdx++ else packetIdx = 1
+            return packetIdx
         }
 
+        /** Maps frequency to an ID or index in the frequency table */
         fun getFrequencyId(freq: Int): Int {
-            val tiqIrFreqTable = intArrayOf(
-                38000, 37900, 37917, 36000, 40000, 39700, 35750, 36400, 36700, 37000,
-                37700, 38380, 38400, 38462, 38740, 39200, 42000, 43600, 44000, 33000,
-                33500, 34000, 34500, 35000, 40500, 41000, 41500, 42500, 43000, 45000
-            )
-            val tiqIrFreqTableSize = tiqIrFreqTable.size
-
             return if (freq > 255) {
-                val index = tiqIrFreqTable.indexOf(freq)
-                if (index == -1) 0 else index
+                tiqIrFreqTable.indexOf(freq).takeIf { it != -1 } ?: 0
             } else {
-                if (freq < tiqIrFreqTableSize) freq else 0
+                if (freq < tiqIrFreqTable.size) freq else 0
             }
         }
 
+        /** Checks if the device is a compatible IR blaster */
+        fun isCompatibleDevice(device: UsbDevice): Boolean {
+            val vid = device.vendorId
+            val pid = device.productId
+            return (vid == 0x10C4 && pid == 0x8468) || (vid == 0x045E && pid == 0x8468)
+        }
+
+        /**
+         * Creates or retrieves a singleton instance of UsbIrService for a compatible device.
+         */
         fun getInstance(usbManager: UsbManager, device: UsbDevice): UsbIrService? {
             if (INSTANCE != null && !usbManager.deviceList.containsValue(device)) {
-                INSTANCE?.close() // Close if device no longer exists
+                INSTANCE?.close()
             }
 
             if (INSTANCE == null && isCompatibleDevice(device)) {
                 var endpointOUT: UsbEndpoint? = null
+                var endpointIN: UsbEndpoint? = null
                 val usbInterface = device.getInterface(0)
 
                 for (i in 0 until usbInterface.endpointCount) {
@@ -62,141 +87,199 @@ class UsbIrService private constructor(
                         if (endpoint.type == UsbConstants.USB_ENDPOINT_XFER_BULK) {
                             when (endpoint.direction) {
                                 UsbConstants.USB_DIR_OUT -> endpointOUT = endpoint
-                                else -> Log.e(LOG_TAG, "undefined endpoints direction")
+                                UsbConstants.USB_DIR_IN -> endpointIN = endpoint
                             }
                         }
                     }
                 }
 
-                if (endpointOUT == null) {
-                    Log.e(LOG_TAG, "Failed setting endpoint")
-                    INSTANCE = null
+                if (endpointOUT == null || endpointIN == null) {
+                    Log.e(LOG_TAG, "Failed to find bulk endpoints")
                     return null
                 }
 
                 val connection = usbManager.openDevice(device)
                 if (connection == null || !connection.claimInterface(usbInterface, true)) {
-                    Log.e(LOG_TAG, "open device FAIL!")
-                    INSTANCE = null
+                    Log.e(LOG_TAG, "Failed to open or claim device")
+                    connection?.close()
                     return null
                 }
-                Log.d(LOG_TAG, "open device SUCCESS!")
-                INSTANCE = UsbIrService(connection, endpointOUT!!)
+
+                Log.d(LOG_TAG, "Device opened successfully")
+                INSTANCE = UsbIrService(connection, endpointOUT!!, endpointIN!!)
             }
             return INSTANCE
         }
     }
 
-    fun transmit(freq: Int, pattern: IntArray) {
-        val maxPayloadPerFragment = epOUT.maxPacketSize - 5
-        if (maxPayloadPerFragment <= 0) {
-            Log.e(LOG_TAG, "Invalid maxPayloadPerFragment: $maxPayloadPerFragment")
-            return
-        }
-
-        val tqIrWriteFragments = mutableListOf<Byte>().apply {
-            add(83)                                 // 'S'
-            add(84)                                 // 'T'
-            add(getCmdId())                         // cmdId
-            add(68)                                 // 'D' - Data transfer (cmd_type)
-            add(getFrequencyId(freq).toByte())      // Frequency id
-            addAll(consumeIrToByteCode(pattern))    // payload
-            add(69)                                 // 'E'
-            add(78)                                 // 'N'
-        }.chunked(maxPayloadPerFragment)
-
-        val cmdUsbPackId = getUsbPackId()
-        val fragmentCount = tqIrWriteFragments.size
-        val toTransfer = mutableListOf<List<Byte>>()
-
-        tqIrWriteFragments.forEachIndexed { index, fragment ->
-            val fragmentHeader = listOf(
-                2,                  // ReportId = 2
-                fragment.size + 3,  // packet size
-                cmdUsbPackId,       // cmd id
-                fragmentCount,      // total fragment count
-                index + 1,          // fragment id
-            ).map { it.toByte() }
-            toTransfer.add(fragmentHeader.plus(fragment))
-        }
-
-        toReady()
-        toTransfer.forEach {
-            bulkTransfer(it)
-        }
-        toSleep()
+    /**
+     * Sends a command to the device (e.g., 'O' for output, 'L' for idle).
+     */
+    private fun sendCmd(cmdType: Byte, cmdId: Byte): Boolean {
+        val pack = byteArrayOf(
+            'S'.toByte(), 'T'.toByte(), // Start signature
+            cmdId,
+            cmdType,
+            'E'.toByte(), 'N'.toByte()  // End signature
+        )
+        return sendReport2(pack, pack.size)
     }
 
-    private fun toReady() {
-        bulkTransfer(listOf(2, 9, getUsbPackId(), 1, 1, 83, 84, getCmdId(), 83, 69, 78)) // 'ST', cmdId, 'S', 'EN'
-    }
+    /**
+     * Sends a report (data packet) to the device, handling fragmentation.
+     */
+    private fun sendReport2(data: ByteArray, size: Int): Boolean {
+        val fragBuf = ByteBuffer.allocate(61) // Report header + max frag size
+        var rdPtr = 0
+        var fragIdx = 0
 
-    private fun toSleep() {
-        bulkTransfer(listOf(2, 9, getUsbPackId(), 1, 1, 83, 84, getCmdId(), 76, 69, 78)) // 'ST', cmdId, 'L', 'EN'
-    }
+        if (size <= 0 || size > MAX_PACKET_SIZE) {
+            Log.e(LOG_TAG, "Invalid packet size: $size")
+            return false
+        }
 
-    private fun bulkTransfer(data: List<Byte>) {
-        val byteWrite = data.toByteArray()
-        try {
-            val result = mConnection.bulkTransfer(epOUT, byteWrite, byteWrite.size, 250)
-            println("$result bytes written " + (byteWrite.size == result))
-            if (result != byteWrite.size) {
-                Log.e(LOG_TAG, "Bulk transfer failed, device may be disconnected")
-                close()
+        val fragCount = (size + MAX_FRAG_SIZE - 1) / MAX_FRAG_SIZE
+        val packetIdx = getPacketIdx()
+
+        while (rdPtr < size) {
+            fragIdx++
+            val fragSize = minOf(MAX_FRAG_SIZE, size - rdPtr)
+            fragBuf.clear()
+            fragBuf.put(2) // Report ID
+            fragBuf.put((fragSize + 3).toByte()) // Fragment size
+            fragBuf.put(packetIdx)
+            fragBuf.put(fragCount.toByte())
+            fragBuf.put(fragIdx.toByte())
+            fragBuf.put(data, rdPtr, fragSize)
+
+            val bytesToSend = 5 + fragSize // Header + data
+            val result = mConnection.bulkTransfer(epOUT, fragBuf.array(), bytesToSend, 1000)
+            if (result != bytesToSend) {
+                Log.e(LOG_TAG, "Failed to send fragment: $result != $bytesToSend")
+                return false
             }
-        } catch (e: Exception) {
-            Log.e(LOG_TAG, "Bulk transfer exception: ${e.message}")
-            close()
-            throw e
+            rdPtr += fragSize
         }
+        return readResponse()
     }
 
+    /**
+     * Reads a response from the device, handling fragmented packets.
+     */
+    private fun readResponse(): Boolean {
+        val buffer = ByteArray(63)
+        var fragCount = 1
+        var fragIdx = 0
+        val packBuf = mutableListOf<Byte>()
+
+        while (fragIdx < fragCount) {
+            val result = mConnection.bulkTransfer(epIN, buffer, buffer.size, 500)
+            if (result < 5) {
+                Log.e(LOG_TAG, "Incomplete response header: $result bytes")
+                return false
+            }
+
+            val reportId = buffer[0]
+            val fragSize = buffer[1]
+            val packetIdx = buffer[2]
+            val fragCountFromHeader = buffer[3]
+            val fragIdxFromHeader = buffer[4]
+
+            if (fragIdx == 0) {
+                fragCount = fragCountFromHeader.toInt()
+            }
+            fragIdx++
+
+            val dataStart = 5
+            val dataSize = result - dataStart
+            packBuf.addAll(buffer.copyOfRange(dataStart, dataStart + dataSize).toList())
+        }
+
+        Log.d(LOG_TAG, "Response received: ${packBuf.toByteArray().toList()}")
+        return true
+    }
+
+    /**
+     * Transmits an IR signal with the specified frequency and pattern.
+     * @param freq Frequency in Hz
+     * @param pattern Array of pulse/space durations in microseconds
+     */
+    fun transmit(freq: Int, pattern: IntArray): Boolean {
+        val cmdId = getCmdId()
+
+        // Send 'O' (Output) command to prepare device
+        if (!sendCmd('O'.toByte(), cmdId)) {
+            Log.e(LOG_TAG, "Failed to send 'O' command")
+            return false
+        }
+
+        // Prepare IR data packet
+        val irData = mutableListOf<Byte>()
+        irData.add('S'.toByte())
+        irData.add('T'.toByte())
+        irData.add(cmdId)
+        irData.add('D'.toByte()) // Data command
+        irData.add(getFrequencyId(freq).toByte())
+        irData.addAll(encodeIrPattern(pattern))
+        irData.add('E'.toByte())
+        irData.add('N'.toByte())
+
+        // Send IR data
+        if (!sendReport2(irData.toByteArray(), irData.size)) {
+            Log.e(LOG_TAG, "Failed to send IR data")
+            return false
+        }
+
+        // Return to idle mode
+        return sendCmd('L'.toByte(), getCmdId())
+    }
+
+    /**
+     * Encodes an IR pattern into a byte sequence for transmission.
+     * @param pattern Array of pulse/space durations in microseconds
+     */
+    private fun encodeIrPattern(pattern: IntArray): List<Byte> {
+        val result = mutableListOf<Byte>()
+        for (i in pattern.indices) {
+            val isOn = i % 2 == 0 // Even indices are pulses (ON), odd are spaces (OFF)
+            val duration = pattern[i]
+            val ticks = duration / IR_TICK_SIZE
+            var remainingTicks = ticks
+
+            while (remainingTicks > 0) {
+                val blockSize = minOf(remainingTicks, MAX_IR_BLOCK_SIZE)
+                val byteValue = if (isOn) (blockSize or 128).toByte() else blockSize.toByte()
+                result.add(byteValue)
+                remainingTicks -= blockSize
+            }
+        }
+        return result
+    }
+
+    /** Closes the USB connection and cleans up resources */
     fun close() {
+        // mConnection.releaseInterface(mConnection.)
         mConnection.close()
         INSTANCE = null
         Log.d(LOG_TAG, "UsbIrService closed")
     }
 }
 
+/**
+ * Requests USB permission for compatible devices.
+ */
 @SuppressLint("WrongConstant")
 fun requestUsbPermissionForCompatibleDev(context: Context, usbManager: UsbManager) {
-    for (device: UsbDevice in usbManager.deviceList.values) {
-        if (isCompatibleDevice(device)) {
-            val requestCode = 0
+    for (device in usbManager.deviceList.values) {
+        if (UsbIrService.isCompatibleDevice(device)) {
             val intent = Intent(ACTION_USB_PERMISSION)
-            val piFlags =
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0
-            val pi = PendingIntent.getBroadcast(context, requestCode, intent, piFlags)
+            val piFlags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                PendingIntent.FLAG_MUTABLE
+            } else {
+                0
+            }
+            val pi = PendingIntent.getBroadcast(context, 0, intent, piFlags)
             usbManager.requestPermission(device, pi)
         }
     }
-}
-
-fun consumeIrToByteCode(pattern: IntArray): ArrayList<Byte> {
-    val usbTickPattern = pattern.map { it / 16 } // Convert microseconds to ticks
-    val result = ArrayList<Byte>(usbTickPattern.size)
-    for ((index, tickCount) in usbTickPattern.withIndex()) {
-        result.addAll(usbTickToUsbByteCode(tickCount, index % 2 == 0))
-    }
-    return result
-}
-fun usbTickToUsbByteCode(tickCount: Int, isOn: Boolean): List<Byte> {
-    val maximumBlockSize = 127
-    var remainingTicks = tickCount
-    val result = ArrayList<Byte>()
-    while (remainingTicks > 0) {
-        val sendBlockSize = minOf(remainingTicks, maximumBlockSize)
-        remainingTicks -= sendBlockSize
-        val byteValue = if (isOn) (sendBlockSize or 128) else sendBlockSize
-        result.add(byteValue.toByte())
-    }
-    return result
-}
-
-fun isCompatibleDevice(device: UsbDevice): Boolean {
-    if (device.interfaceCount != 1) return false
-    if (device.getInterface(0).endpointCount == 0) return false
-    if (device.vendorId == 4292 && device.productId == 33896) return true
-    if (device.vendorId == 1118 && device.productId == 33896) return true
-    return false
 }
