@@ -7,7 +7,6 @@ import android.content.Intent
 import android.hardware.usb.*
 import android.os.Build
 import android.util.Log
-import androidx.annotation.VisibleForTesting
 
 private const val LOG_TAG = "UsbIrService"
 
@@ -31,6 +30,22 @@ class UsbIrService private constructor(
         fun getUsbPackId(): Byte {
             if (_usbPackCnt < 15) _usbPackCnt++ else _usbPackCnt = 1
             return _usbPackCnt
+        }
+
+        fun getFrequencyId(freq: Int): Int {
+            val tiqIrFreqTable = intArrayOf(
+                38000, 37900, 37917, 36000, 40000, 39700, 35750, 36400, 36700, 37000,
+                37700, 38380, 38400, 38462, 38740, 39200, 42000, 43600, 44000, 33000,
+                33500, 34000, 34500, 35000, 40500, 41000, 41500, 42500, 43000, 45000
+            )
+            val tiqIrFreqTableSize = tiqIrFreqTable.size
+
+            return if (freq > 255) {
+                val index = tiqIrFreqTable.indexOf(freq)
+                if (index == -1) 0 else index
+            } else {
+                if (freq < tiqIrFreqTableSize) freq else 0
+            }
         }
 
         fun getInstance(usbManager: UsbManager, device: UsbDevice): UsbIrService? {
@@ -80,15 +95,15 @@ class UsbIrService private constructor(
         }
 
         val tqIrWriteFragments = mutableListOf<Byte>().apply {
-            add(83)                                 // const. S
-            add(84)                                 // const. T
+            add(83)                                 // 'S'
+            add(84)                                 // 'T'
             add(getCmdId())                         // cmdId
-            add(68)                                 // D - Transfer mode
-            add((freq / 1000).toByte())             // Replace '0' with freq converted appropriately
+            add(68)                                 // 'D' - Data transfer (cmd_type)
+            add(getFrequencyId(freq).toByte())      // Frequency id
             addAll(consumeIrToByteCode(pattern))    // payload
-            add(69)                                 // const. E
-            add(78)                                 // const. N
-        }.chunked(maxPayloadPerFragment)            // Increase chunk size to reduce number of fragments
+            add(69)                                 // 'E'
+            add(78)                                 // 'N'
+        }.chunked(maxPayloadPerFragment)
 
         val cmdUsbPackId = getUsbPackId()
         val fragmentCount = tqIrWriteFragments.size
@@ -96,13 +111,12 @@ class UsbIrService private constructor(
 
         tqIrWriteFragments.forEachIndexed { index, fragment ->
             val fragmentHeader = listOf(
-                2,                  // buf[0] const. ReportId = 2
-                fragment.size + 3,  // buf[1] packet size (payload size + 3 header bytes)
-                cmdUsbPackId,       // buf[2] cmd id
-                fragmentCount,      // buf[3] total fragment count
-                index + 1,          // buf[4] fragment id always > 0
+                2,                  // ReportId = 2
+                fragment.size + 3,  // packet size
+                cmdUsbPackId,       // cmd id
+                fragmentCount,      // total fragment count
+                index + 1,          // fragment id
             ).map { it.toByte() }
-
             toTransfer.add(fragmentHeader.plus(fragment))
         }
 
@@ -114,11 +128,11 @@ class UsbIrService private constructor(
     }
 
     private fun toReady() {
-        bulkTransfer(byteArrayOf(2, 9, getUsbPackId(), 1, 1, 83, 84, getCmdId(), 83, 69, 78).toList()) // S - SendMode
+        bulkTransfer(listOf(2, 9, getUsbPackId(), 1, 1, 83, 84, getCmdId(), 83, 69, 78)) // 'ST', cmdId, 'S', 'EN'
     }
 
     private fun toSleep() {
-        bulkTransfer(byteArrayOf(2, 9, getUsbPackId(), 1, 1, 83, 84, getCmdId(), 76, 69, 78).toList()) // L -  IdleMode
+        bulkTransfer(listOf(2, 9, getUsbPackId(), 1, 1, 83, 84, getCmdId(), 76, 69, 78)) // 'ST', cmdId, 'L', 'EN'
     }
 
     private fun bulkTransfer(data: List<Byte>) {
@@ -158,33 +172,25 @@ fun requestUsbPermissionForCompatibleDev(context: Context, usbManager: UsbManage
     }
 }
 
-@VisibleForTesting
-fun consumeIrToByteCode(consumeIrPattern: IntArray): ArrayList<Byte> {
-    val usbTickPattern = consumeIrPattern.map { it / 16 }
+fun consumeIrToByteCode(pattern: IntArray): ArrayList<Byte> {
+    val usbTickPattern = pattern.map { it / 16 } // Convert microseconds to ticks
     val result = ArrayList<Byte>(usbTickPattern.size)
     for ((index, tickCount) in usbTickPattern.withIndex()) {
         result.addAll(usbTickToUsbByteCode(tickCount, index % 2 == 0))
     }
     return result
 }
-
-@VisibleForTesting
 fun usbTickToUsbByteCode(tickCount: Int, isOn: Boolean): List<Byte> {
     val maximumBlockSize = 127
-    var i = tickCount
-    val result = ArrayList<Int>()
-    while (i > 0) {
-        var sendBlockSize = i
-        if (sendBlockSize > maximumBlockSize) {
-            sendBlockSize = maximumBlockSize
-        }
-        i -= sendBlockSize
-        if (isOn) {
-            sendBlockSize = sendBlockSize or 128
-        }
-        result.add(sendBlockSize)
+    var remainingTicks = tickCount
+    val result = ArrayList<Byte>()
+    while (remainingTicks > 0) {
+        val sendBlockSize = minOf(remainingTicks, maximumBlockSize)
+        remainingTicks -= sendBlockSize
+        val byteValue = if (isOn) (sendBlockSize or 128) else sendBlockSize
+        result.add(byteValue.toByte())
     }
-    return result.map { it.toByte() }
+    return result
 }
 
 fun isCompatibleDevice(device: UsbDevice): Boolean {

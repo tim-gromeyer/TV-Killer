@@ -89,8 +89,7 @@ class MainActivity : AppCompatActivity() {
                     val duration = System.currentTimeMillis() - startTime
                     currentProgress++
                     progressBar.progress = currentProgress
-                    patternsCountText.setText("Send packet number $currentProgress, took $duration ms")
-                    delay(100)
+                    patternsCountText.text = "Send packet number $currentProgress, took $duration ms"
                 }
             }
 
