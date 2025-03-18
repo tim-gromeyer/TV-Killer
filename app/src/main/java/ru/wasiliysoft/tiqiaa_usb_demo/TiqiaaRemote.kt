@@ -7,7 +7,6 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.hardware.usb.*
 import android.util.Log
-import androidx.core.content.ContextCompat
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
@@ -150,7 +149,7 @@ class TiqiaaUsbDriver(private val context: Context) {
             context,
             0,
             Intent(ACTION_USB_PERMISSION),
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
         )
         val latch = CountDownLatch(1)
         var permissionGranted = false
@@ -164,12 +163,7 @@ class TiqiaaUsbDriver(private val context: Context) {
             }
         }
 
-        ContextCompat.registerReceiver(
-            context,
-            receiver,
-            IntentFilter(ACTION_USB_PERMISSION),
-            ContextCompat.RECEIVER_NOT_EXPORTED
-        )
+        context.registerReceiver(receiver, IntentFilter(ACTION_USB_PERMISSION))
         usbManager.requestPermission(device, permissionIntent)
 
         // Wait for permission result with a timeout

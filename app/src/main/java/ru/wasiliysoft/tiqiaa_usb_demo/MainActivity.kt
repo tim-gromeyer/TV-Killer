@@ -102,8 +102,8 @@ class MainActivity : AppCompatActivity() {
             }
 
             Toast.makeText(this@MainActivity, "Finished transmitting all patterns", Toast.LENGTH_SHORT).show()
+            progressBar.visibility = View.GONE
         }
-        progressBar.visibility = View.GONE
     }
 
     private fun initTiqiaaDriver() {
