@@ -1,5 +1,6 @@
 package ru.wasiliysoft.tiqiaa_usb_demo
 
+import android.annotation.SuppressLint
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -18,6 +19,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import java.io.IOException
+import kotlin.math.roundToInt
 
 class MainActivity : AppCompatActivity() {
     private var tiqiaaDriver: TiqiaaUsbDriver? = null
@@ -46,12 +48,26 @@ class MainActivity : AppCompatActivity() {
         initTiqiaaDriver()
     }
 
+    /** Loads IR patterns from JSON and converts them to microseconds */
     private fun loadPatternsFromJson() {
         try {
+            // Load raw JSON data
             val inputStream = resources.openRawResource(R.raw.ir_patterns)
             val jsonString = inputStream.bufferedReader().use { it.readText() }
-            irPatterns = Gson().fromJson(jsonString, Array<IrPattern>::class.java).toList()
+            val loadedPatterns = Gson().fromJson(jsonString, Array<IrPattern>::class.java).toList()
             inputStream.close()
+
+            // Convert patterns to microseconds
+            irPatterns = loadedPatterns.map { irPattern ->
+                if (irPattern.designation == "test") {
+                    irPattern
+                }
+                else {
+                    val convertedPatterns = irPattern.patterns.map { convertPatternToMicroseconds(it) }
+                    val convertedMute = convertPatternToMicroseconds(irPattern.mute)
+                    IrPattern(irPattern.designation, convertedPatterns, convertedMute)
+                }
+            }
 
             // Calculate and display total number of patterns
             val totalPatterns = irPatterns.sumOf { it.patterns.size } + irPatterns.size
@@ -64,6 +80,16 @@ class MainActivity : AppCompatActivity() {
             irPatterns = emptyList()
             patternsCountText.text = "Patterns loaded: 0"
         }
+    }
+
+    /** Converts a pattern from carrier cycles to microseconds */
+    private fun convertPatternToMicroseconds(pattern: Pattern): Pattern {
+        val frequency = pattern.frequency
+        val periodUs = 1_000_000.0 / frequency // Period in microseconds
+        val convertedPattern = pattern.pattern.map { cycles ->
+            (cycles * periodUs).roundToInt() // Convert cycles to microseconds
+        }.toIntArray()
+        return Pattern(frequency, convertedPattern, pattern.comment)
     }
 
     private fun sendAllPatterns() {
@@ -120,13 +146,22 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    @SuppressLint("UnspecifiedRegisterReceiverFlag")
     private fun registerReceivers(): BroadcastReceiver {
         val usbBroadCastReceiver = getUsbBroadCastReceiver()
-        arrayOf(
+        val intentFilters = arrayOf(
             IntentFilter(UsbManager.ACTION_USB_DEVICE_ATTACHED),
             IntentFilter(UsbManager.ACTION_USB_DEVICE_DETACHED),
             IntentFilter(TiqiaaUsbDriver.ACTION_USB_PERMISSION)
-        ).map { registerReceiver(usbBroadCastReceiver, it) }
+        )
+
+        intentFilters.forEach { filter ->
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+                registerReceiver(usbBroadCastReceiver, filter, RECEIVER_NOT_EXPORTED)
+            } else {
+                registerReceiver(usbBroadCastReceiver, filter)
+            }
+        }
         return usbBroadCastReceiver
     }
 
