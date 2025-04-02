@@ -83,7 +83,11 @@ class MainActivity : AppCompatActivity() {
     }
 
     /** Converts a pattern from carrier cycles to microseconds */
-    private fun convertPatternToMicroseconds(pattern: Pattern): Pattern {
+    private fun convertPatternToMicroseconds(pattern: Pattern?): Pattern? {
+        if (pattern == null) {
+            return null
+        }
+
         val frequency = pattern.frequency
         val periodUs = 1_000_000.0 / frequency // Period in microseconds
         val convertedPattern = pattern.pattern.map { cycles ->
@@ -111,7 +115,7 @@ class MainActivity : AppCompatActivity() {
             var currentProgress = 0
 
             irPatterns.forEach { irPattern ->
-                irPattern.patterns.forEach { pattern ->
+                irPattern.patterns.filterNotNull().forEach { pattern ->
                     try {
                         val startTime = System.currentTimeMillis()
                         val success = tiqiaaDriver!!.sendIrSignal(pattern.frequency, pattern.pattern.toList())
