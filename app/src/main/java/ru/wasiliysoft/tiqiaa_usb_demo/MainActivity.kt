@@ -23,7 +23,7 @@ import java.io.IOException
 import kotlin.math.roundToInt
 
 class MainActivity : AppCompatActivity() {
-    private var tiqiaaDriver: TiqiaaUsbDriver? = null
+    private var irDriver: TiqiaaUsbDriver? = null
     private val usbManager: UsbManager by lazy { getSystemService(USB_SERVICE) as UsbManager }
     private lateinit var usbBroadCastReceiver: BroadcastReceiver
     private lateinit var irPatterns: List<IrPattern>
@@ -46,7 +46,7 @@ class MainActivity : AppCompatActivity() {
             sendAllPatterns()
         }
 
-        initTiqiaaDriver()
+        initDriver()
     }
 
     /** Loads IR patterns from JSON and converts them to microseconds */
@@ -55,31 +55,26 @@ class MainActivity : AppCompatActivity() {
             // Load raw JSON data
             val inputStream = resources.openRawResource(R.raw.ir_patterns)
             val jsonString = inputStream.bufferedReader().use { it.readText() }
-            val loadedPatterns = Gson().fromJson(jsonString, Array<IrPattern>::class.java).toList()
+            val loadedPatterns = Gson().fromJson(jsonString, Array<IrPattern>::class.java).filterNotNull().toList()
             inputStream.close()
 
             // Convert patterns to microseconds
             irPatterns = loadedPatterns.map { irPattern ->
-                if (irPattern.designation == "test") {
-                    irPattern
-                }
-                else {
-                    val convertedPatterns = irPattern.patterns.map { convertPatternToMicroseconds(it) }
-                    val convertedMute = convertPatternToMicroseconds(irPattern.mute)
-                    IrPattern(irPattern.designation, convertedPatterns, convertedMute)
-                }
+                val convertedPatterns = irPattern.patterns.map { convertPatternToMicroseconds(it) }
+                val convertedMute = convertPatternToMicroseconds(irPattern.mute)
+                IrPattern(irPattern.designation, convertedPatterns, convertedMute)
             }
 
             // Calculate and display total number of patterns
             val totalPatterns = irPatterns.sumOf { it.patterns.size } + irPatterns.size
-            patternsCountText.text = "Patterns loaded: $totalPatterns"
+            patternsCountText.text = getString(R.string.patterns_loaded, totalPatterns)
             progressBar.max = totalPatterns
 
         } catch (e: IOException) {
             e.printStackTrace()
             Toast.makeText(this, "Failed to load IR patterns", Toast.LENGTH_LONG).show()
             irPatterns = emptyList()
-            patternsCountText.text = "Patterns loaded: 0"
+            patternsCountText.text = getString(R.string.patterns_loaded, 0)
         }
     }
 
@@ -101,8 +96,8 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        if (tiqiaaDriver == null) {
-            Toast.makeText(this, "Tiqiaa USB driver not initialized", Toast.LENGTH_SHORT).show()
+        if (irDriver == null) {
+            Toast.makeText(this, "USB driver not initialized", Toast.LENGTH_SHORT).show()
             return
         }
 
@@ -118,14 +113,15 @@ class MainActivity : AppCompatActivity() {
                 irPattern.patterns.filterNotNull().forEach { pattern ->
                     try {
                         val startTime = System.currentTimeMillis()
-                        val success = tiqiaaDriver!!.sendIrSignal(pattern.frequency, pattern.pattern.toList())
+                        val success = irDriver!!.sendIrSignal(pattern.frequency, pattern.pattern.toList())
                         if (!success) throw Exception("Failed to send IR signal")
                         val duration = System.currentTimeMillis() - startTime
                         // Update UI on Main thread
                         withContext(Dispatchers.Main) {
                             currentProgress++
                             progressBar.progress = currentProgress
-                            patternsCountText.text = "Send packet number $currentProgress, took $duration ms"
+                            patternsCountText.text =
+                                getString(R.string.packet_number, currentProgress, duration)
                         }
                     } catch (e: Exception) {
                         withContext(Dispatchers.Main) {
@@ -148,17 +144,17 @@ class MainActivity : AppCompatActivity() {
                     Toast.LENGTH_SHORT
                 ).show()
                 progressBar.visibility = View.GONE
-                // You might also want to update patternsCountText with the overall duration
-                patternsCountText.text = "Completed all $currentProgress patterns in ${overallDuration}ms"
+                patternsCountText.text =
+                    getString(R.string.completed_all_patterns, currentProgress, overallDuration)
             }
         }
     }
 
-    private fun initTiqiaaDriver() {
+    private fun initDriver() {
         usbBroadCastReceiver = registerReceivers()
-        tiqiaaDriver = TiqiaaUsbDriver(this)
+        irDriver = TiqiaaUsbDriver(this)
         if (usbManager.deviceList.isNotEmpty()) {
-            if (tiqiaaDriver!!.init()) {
+            if (irDriver!!.init()) {
                 Toast.makeText(this, "Tiqiaa USB driver initialized", Toast.LENGTH_SHORT).show()
             } else {
                 Toast.makeText(this, "Failed to initialize Tiqiaa USB driver", Toast.LENGTH_LONG).show()
@@ -192,24 +188,24 @@ class MainActivity : AppCompatActivity() {
             when (intent.action) {
                 UsbManager.ACTION_USB_DEVICE_ATTACHED -> {
                     Toast.makeText(context, "USB device inserted", Toast.LENGTH_SHORT).show()
-                    if (tiqiaaDriver == null) tiqiaaDriver = TiqiaaUsbDriver(context)
-                    if (tiqiaaDriver!!.init()) {
-                        Toast.makeText(context, "Tiqiaa USB driver initialized", Toast.LENGTH_SHORT).show()
+                    if (irDriver == null) irDriver = TiqiaaUsbDriver(context)
+                    if (irDriver!!.init()) {
+                        Toast.makeText(context, "USB driver initialized", Toast.LENGTH_SHORT).show()
                     } else {
-                        Toast.makeText(context, "Failed to initialize Tiqiaa USB driver", Toast.LENGTH_LONG).show()
+                        Toast.makeText(context, "Failed to initialize USB driver", Toast.LENGTH_LONG).show()
                     }
                 }
                 UsbManager.ACTION_USB_DEVICE_DETACHED -> {
-                    tiqiaaDriver?.deinit()
-                    tiqiaaDriver = null
+                    irDriver?.deinit()
+                    irDriver = null
                     Toast.makeText(context, "USB device removed", Toast.LENGTH_SHORT).show()
                 }
                 TiqiaaUsbDriver.ACTION_USB_PERMISSION -> {
                     synchronized(this) {
                         val device = intent.getParcelableExtra<UsbDevice>(UsbManager.EXTRA_DEVICE)
                         if (intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false) && device != null) {
-                            if (tiqiaaDriver == null) tiqiaaDriver = TiqiaaUsbDriver(context)
-                            if (tiqiaaDriver!!.init()) {
+                            if (irDriver == null) irDriver = TiqiaaUsbDriver(context)
+                            if (irDriver!!.init()) {
                                 Toast.makeText(context, "USB device permission granted and driver initialized", Toast.LENGTH_SHORT).show()
                             } else {
                                 Toast.makeText(context, "Failed to initialize USB driver after permission", Toast.LENGTH_LONG).show()
@@ -225,7 +221,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
-        tiqiaaDriver?.deinit()
+        irDriver?.deinit()
         if (this::usbBroadCastReceiver.isInitialized) {
             try {
                 unregisterReceiver(usbBroadCastReceiver)
