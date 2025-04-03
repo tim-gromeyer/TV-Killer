@@ -13,6 +13,6 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "tiqiaa-usb-demo"
+rootProject.name = "TV-Killer"
 include(":app")
  
