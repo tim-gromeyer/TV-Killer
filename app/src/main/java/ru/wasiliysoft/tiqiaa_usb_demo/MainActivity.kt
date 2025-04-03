@@ -18,6 +18,7 @@ import com.google.gson.Gson
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.IOException
 import kotlin.math.roundToInt
 
@@ -84,9 +85,7 @@ class MainActivity : AppCompatActivity() {
 
     /** Converts a pattern from carrier cycles to microseconds */
     private fun convertPatternToMicroseconds(pattern: Pattern?): Pattern? {
-        if (pattern == null) {
-            return null
-        }
+        if (pattern == null) return null
 
         val frequency = pattern.frequency
         val periodUs = 1_000_000.0 / frequency // Period in microseconds
@@ -107,12 +106,13 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        CoroutineScope(Dispatchers.Main).launch {
-            progressBar.visibility = View.VISIBLE
-            progressBar.progress = 0
-            Toast.makeText(this@MainActivity, "Starting transmission of all patterns", Toast.LENGTH_SHORT).show()
+        progressBar.visibility = View.VISIBLE
+        progressBar.progress = 0
+        Toast.makeText(this@MainActivity, "Starting transmission of all patterns", Toast.LENGTH_SHORT).show()
 
+        CoroutineScope(Dispatchers.IO).launch {
             var currentProgress = 0
+            val overallStartTime = System.currentTimeMillis() // Track overall start time
 
             irPatterns.forEach { irPattern ->
                 irPattern.patterns.filterNotNull().forEach { pattern ->
@@ -121,18 +121,36 @@ class MainActivity : AppCompatActivity() {
                         val success = tiqiaaDriver!!.sendIrSignal(pattern.frequency, pattern.pattern.toList())
                         if (!success) throw Exception("Failed to send IR signal")
                         val duration = System.currentTimeMillis() - startTime
-                        currentProgress++
-                        progressBar.progress = currentProgress
-                        patternsCountText.text = "Send packet number $currentProgress, took $duration ms"
+                        // Update UI on Main thread
+                        withContext(Dispatchers.Main) {
+                            currentProgress++
+                            progressBar.progress = currentProgress
+                            patternsCountText.text = "Send packet number $currentProgress, took $duration ms"
+                        }
                     } catch (e: Exception) {
-                        Toast.makeText(this@MainActivity, "Transmission failed: ${e.message}", Toast.LENGTH_SHORT).show()
+                        withContext(Dispatchers.Main) {
+                            Toast.makeText(
+                                this@MainActivity,
+                                "Transmission failed: ${e.message}",
+                                Toast.LENGTH_SHORT
+                            ).show()
+                        }
                         return@launch
                     }
                 }
             }
 
-            Toast.makeText(this@MainActivity, "Finished transmitting all patterns", Toast.LENGTH_SHORT).show()
-            progressBar.visibility = View.GONE
+            val overallDuration = System.currentTimeMillis() - overallStartTime // Calculate overall duration
+            withContext(Dispatchers.Main) {
+                Toast.makeText(
+                    this@MainActivity,
+                    "Finished transmitting all patterns in ${overallDuration}ms",
+                    Toast.LENGTH_SHORT
+                ).show()
+                progressBar.visibility = View.GONE
+                // You might also want to update patternsCountText with the overall duration
+                patternsCountText.text = "Completed all $currentProgress patterns in ${overallDuration}ms"
+            }
         }
     }
 

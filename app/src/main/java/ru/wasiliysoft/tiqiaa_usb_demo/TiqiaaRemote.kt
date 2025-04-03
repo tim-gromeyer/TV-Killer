@@ -113,14 +113,13 @@ class TiqiaaUsbDriver(private val context: Context) {
      */
     fun sendIrSignal(freq: Int, pulses: List<Int>): Boolean {
         Log.d(TAG, "sendIrSignal called with freq=$freq, pulses=${pulses.size} elements")
-        // Reset to idle and send mode before each IR signal
         if (!sendCmd(CMD_IDLE_MODE, getCmdId()) || !sendCmd(CMD_SEND_MODE, getCmdId())) {
             Log.e(TAG, "Failed to reset device state before sending IR signal")
             return false
         }
         Log.d(TAG, "Device reset to idle and send mode")
 
-        val buf = ByteArray(128)
+        val buf = ByteArray(1017) // Increased to 1017 bytes
         var bufSize = 0
 
         for (i in pulses.indices step 2) {
@@ -300,7 +299,7 @@ class TiqiaaUsbDriver(private val context: Context) {
 
         Log.d(TAG, "recResponse: starting response reception")
         while (fragIdx < fragCount) {
-            val bytesRead = connection!!.bulkTransfer(endpointIn, fragBuf, fragBuf.size, 500)
+            val bytesRead = connection!!.bulkTransfer(endpointIn, fragBuf, fragBuf.size, 5000)
             if (bytesRead < 0) {
                 Log.e(TAG, "Error receiving response fragment ${fragIdx + 1}: $bytesRead")
                 return false
