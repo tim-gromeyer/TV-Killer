@@ -17,6 +17,7 @@ import androidx.appcompat.app.AppCompatActivity
 import com.google.gson.Gson
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.IOException
@@ -29,6 +30,10 @@ class MainActivity : AppCompatActivity() {
     private lateinit var irPatterns: List<IrPattern>
     private lateinit var progressBar: ProgressBar
     private lateinit var patternsCountText: TextView
+    private lateinit var transmissionStatus: TextView
+    private lateinit var stopButton: Button
+    private lateinit var startButton: Button
+    private var transmissionJob: Job? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -37,13 +42,25 @@ class MainActivity : AppCompatActivity() {
         // Initialize UI elements
         progressBar = findViewById(R.id.progressBar)
         patternsCountText = findViewById(R.id.patternsCountText)
-        val btn = findViewById<Button>(R.id.button)
+        transmissionStatus = findViewById(R.id.transmissionStatus)
+        startButton = findViewById<Button>(R.id.startButton)
+        stopButton = findViewById(R.id.stopButton)
+        stopButton.isEnabled = false // Initially disabled
 
         // Load patterns from JSON file
         loadPatternsFromJson()
 
-        btn.setOnClickListener {
+        startButton.setOnClickListener {
             sendAllPatterns()
+        }
+
+        stopButton.setOnClickListener {
+            transmissionJob?.cancel()
+            Toast.makeText(this, "Transmission stopped", Toast.LENGTH_SHORT).show()
+            transmissionStatus.text = "Transmission stopped"
+            startButton.isEnabled = true
+            stopButton.isEnabled = false
+            progressBar.visibility = View.GONE
         }
 
         initDriver()
@@ -52,20 +69,17 @@ class MainActivity : AppCompatActivity() {
     /** Loads IR patterns from JSON and converts them to microseconds */
     private fun loadPatternsFromJson() {
         try {
-            // Load raw JSON data
             val inputStream = resources.openRawResource(R.raw.ir_patterns)
             val jsonString = inputStream.bufferedReader().use { it.readText() }
             val loadedPatterns = Gson().fromJson(jsonString, Array<IrPattern>::class.java).filterNotNull().toList()
             inputStream.close()
 
-            // Convert patterns to microseconds
             irPatterns = loadedPatterns.map { irPattern ->
                 val convertedPatterns = irPattern.patterns.map { convertPatternToMicroseconds(it) }
                 val convertedMute = convertPatternToMicroseconds(irPattern.mute)
                 IrPattern(irPattern.designation, convertedPatterns, convertedMute)
             }
 
-            // Calculate and display total number of patterns
             val totalPatterns = irPatterns.sumOf { it.patterns.size } + irPatterns.size
             patternsCountText.text = getString(R.string.patterns_loaded, totalPatterns)
             progressBar.max = totalPatterns
@@ -81,11 +95,10 @@ class MainActivity : AppCompatActivity() {
     /** Converts a pattern from carrier cycles to microseconds */
     private fun convertPatternToMicroseconds(pattern: Pattern?): Pattern? {
         if (pattern == null) return null
-
         val frequency = pattern.frequency
-        val periodUs = 1_000_000.0 / frequency // Period in microseconds
+        val periodUs = 1_000_000.0 / frequency
         val convertedPattern = pattern.pattern.map { cycles ->
-            (cycles * periodUs).roundToInt() // Convert cycles to microseconds
+            (cycles * periodUs).roundToInt()
         }.toIntArray()
         return Pattern(frequency, convertedPattern, pattern.comment)
     }
@@ -103,25 +116,29 @@ class MainActivity : AppCompatActivity() {
 
         progressBar.visibility = View.VISIBLE
         progressBar.progress = 0
-        Toast.makeText(this@MainActivity, "Starting transmission of all patterns", Toast.LENGTH_SHORT).show()
+        transmissionStatus.text = "Transmitting..."
+        startButton.isEnabled = false // Disable Transmit button
+        stopButton.isEnabled = true // Enable Stop button
 
-        CoroutineScope(Dispatchers.IO).launch {
+        transmissionJob = CoroutineScope(Dispatchers.IO).launch {
             var currentProgress = 0
-            val overallStartTime = System.currentTimeMillis() // Track overall start time
+            val overallStartTime = System.currentTimeMillis()
 
             irPatterns.forEach { irPattern ->
                 irPattern.patterns.filterNotNull().forEach { pattern ->
+                    withContext(Dispatchers.Main) {
+                        transmissionStatus.text = "Transmitting pattern ${currentProgress + 1} of ${progressBar.max}"
+                    }
                     try {
                         val startTime = System.currentTimeMillis()
                         val success = irDriver!!.sendIrSignal(pattern.frequency, pattern.pattern.toList())
                         if (!success) throw Exception("Failed to send IR signal")
                         val duration = System.currentTimeMillis() - startTime
-                        // Update UI on Main thread
                         withContext(Dispatchers.Main) {
                             currentProgress++
                             progressBar.progress = currentProgress
-                            patternsCountText.text =
-                                getString(R.string.packet_number, currentProgress, duration)
+                            // Optionally keep patternsCountText for total patterns only
+                            patternsCountText.text = getString(R.string.patterns_loaded, progressBar.max)
                         }
                     } catch (e: Exception) {
                         withContext(Dispatchers.Main) {
@@ -130,22 +147,22 @@ class MainActivity : AppCompatActivity() {
                                 "Transmission failed: ${e.message}",
                                 Toast.LENGTH_SHORT
                             ).show()
+                            transmissionStatus.text = "Transmission failed"
+                            startButton.isEnabled = true
+                            stopButton.isEnabled = false
+                            progressBar.visibility = View.GONE
                         }
                         return@launch
                     }
                 }
             }
 
-            val overallDuration = System.currentTimeMillis() - overallStartTime // Calculate overall duration
+            val overallDuration = System.currentTimeMillis() - overallStartTime
             withContext(Dispatchers.Main) {
-                Toast.makeText(
-                    this@MainActivity,
-                    "Finished transmitting all patterns in ${overallDuration}ms",
-                    Toast.LENGTH_SHORT
-                ).show()
+                transmissionStatus.text = "Transmission complete in ${overallDuration}ms"
+                startButton.isEnabled = true
+                stopButton.isEnabled = false
                 progressBar.visibility = View.GONE
-                patternsCountText.text =
-                    getString(R.string.completed_all_patterns, currentProgress, overallDuration)
             }
         }
     }
@@ -155,12 +172,12 @@ class MainActivity : AppCompatActivity() {
         irDriver = TiqiaaUsbDriver(this)
         if (usbManager.deviceList.isNotEmpty()) {
             if (irDriver!!.init()) {
-                Toast.makeText(this, "Tiqiaa USB driver initialized", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, "USB driver initialized", Toast.LENGTH_SHORT).show()
             } else {
-                Toast.makeText(this, "Failed to initialize Tiqiaa USB driver", Toast.LENGTH_LONG).show()
+                Toast.makeText(this, "Failed to initialize USB driver", Toast.LENGTH_LONG).show()
             }
         } else {
-            Toast.makeText(this, "Insert Tiqiaa USB IR blaster", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, "Insert USB IR blaster", Toast.LENGTH_LONG).show()
         }
     }
 
