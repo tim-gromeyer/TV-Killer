@@ -7,6 +7,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
+import android.os.Build
 import android.os.Bundle
 import android.view.View
 import android.widget.Button
@@ -25,7 +26,6 @@ import kotlin.math.roundToInt
 
 class MainActivity : AppCompatActivity() {
     private var irBlaster: IrBlaster? = null
-    private val usbManager: UsbManager by lazy { getSystemService(USB_SERVICE) as UsbManager }
     private lateinit var usbBroadCastReceiver: BroadcastReceiver
     private lateinit var irPatterns: List<IrPattern>
     private lateinit var progressBar: ProgressBar
@@ -57,7 +57,7 @@ class MainActivity : AppCompatActivity() {
         stopButton.setOnClickListener {
             transmissionJob?.cancel()
             Toast.makeText(this, "Transmission stopped", Toast.LENGTH_SHORT).show()
-            transmissionStatus.text = "Transmission stopped"
+            transmissionStatus.text = getString(R.string.transmission_stopped)
             startButton.isEnabled = true
             stopButton.isEnabled = false
             progressBar.visibility = View.GONE
@@ -139,7 +139,7 @@ class MainActivity : AppCompatActivity() {
 
         progressBar.visibility = View.VISIBLE
         progressBar.progress = 0
-        transmissionStatus.text = "Transmitting..."
+        transmissionStatus.text = getString(R.string.transmitting)
         startButton.isEnabled = false // Disable Transmit button
         stopButton.isEnabled = true // Enable Stop button
 
@@ -150,13 +150,15 @@ class MainActivity : AppCompatActivity() {
             irPatterns.forEach { irPattern ->
                 irPattern.patterns.filterNotNull().forEach { pattern ->
                     withContext(Dispatchers.Main) {
-                        transmissionStatus.text = "Transmitting pattern ${currentProgress + 1} of ${progressBar.max}"
+                        transmissionStatus.text = getString(
+                            R.string.transmitting_pattern_of,
+                            currentProgress + 1,
+                            progressBar.max
+                        )
                     }
                     try {
-                        val startTime = System.currentTimeMillis()
-                        val success = irBlaster!!.sendIrSignal(pattern.frequency, pattern.pattern.toList())
+                        val success = irBlaster!!.sendIrSignal(pattern.frequency, pattern.pattern)
                         if (!success) throw Exception("Failed to send IR signal")
-                        val duration = System.currentTimeMillis() - startTime
                         withContext(Dispatchers.Main) {
                             currentProgress++
                             progressBar.progress = currentProgress
@@ -170,7 +172,7 @@ class MainActivity : AppCompatActivity() {
                                 "Transmission failed: ${e.message}",
                                 Toast.LENGTH_SHORT
                             ).show()
-                            transmissionStatus.text = "Transmission failed"
+                            transmissionStatus.text = getString(R.string.transmission_failed)
                             startButton.isEnabled = true
                             stopButton.isEnabled = false
                             progressBar.visibility = View.GONE
@@ -182,7 +184,8 @@ class MainActivity : AppCompatActivity() {
 
             val overallDuration = System.currentTimeMillis() - overallStartTime
             withContext(Dispatchers.Main) {
-                transmissionStatus.text = "Transmission complete in ${overallDuration}ms"
+                transmissionStatus.text =
+                    getString(R.string.transmission_complete_in_ms, overallDuration)
                 startButton.isEnabled = true
                 stopButton.isEnabled = false
                 progressBar.visibility = View.GONE
@@ -200,7 +203,7 @@ class MainActivity : AppCompatActivity() {
         )
 
         intentFilters.forEach { filter ->
-            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 registerReceiver(usbBroadCastReceiver, filter, RECEIVER_NOT_EXPORTED)
             } else {
                 registerReceiver(usbBroadCastReceiver, filter)
@@ -217,11 +220,7 @@ class MainActivity : AppCompatActivity() {
                     if (irBlaster !is BuiltInIrBlaster) {
                         Toast.makeText(context, "USB device inserted", Toast.LENGTH_SHORT).show()
                         irBlaster = TiqiaaUsbDriver(context).also {
-                            if (it.init()) {
-                                Toast.makeText(context, "USB driver initialized", Toast.LENGTH_SHORT).show()
-                            } else {
-                                Toast.makeText(context, "Failed to initialize USB driver", Toast.LENGTH_LONG).show()
-                            }
+                            it.init()
                         }
                     }
                 }
@@ -236,7 +235,12 @@ class MainActivity : AppCompatActivity() {
                 }
                 TiqiaaUsbDriver.ACTION_USB_PERMISSION -> {
                     synchronized(this) {
-                        val device = intent.getParcelableExtra<UsbDevice>(UsbManager.EXTRA_DEVICE)
+                        val device = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                            intent.getParcelableExtra<UsbDevice>(UsbManager.EXTRA_DEVICE, UsbDevice::class.java)
+                        } else {
+                            @Suppress("DEPRECATION")
+                            intent.getParcelableExtra<UsbDevice>(UsbManager.EXTRA_DEVICE)
+                        }
                         if (intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false) && device != null) {
                             irBlaster = TiqiaaUsbDriver(context).also {
                                 if (it.init()) {

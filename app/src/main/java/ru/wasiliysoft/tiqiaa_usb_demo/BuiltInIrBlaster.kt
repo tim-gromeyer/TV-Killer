@@ -16,9 +16,9 @@ class BuiltInIrBlaster(private val context: Context) : IrBlaster {
         irManager = null
     }
 
-    override fun sendIrSignal(frequency: Int, pattern: List<Int>): Boolean {
+    override fun sendIrSignal(frequency: Int, pattern: IntArray): Boolean {
         try {
-            irManager?.transmit(frequency, pattern.toIntArray()) ?: false
+            irManager?.transmit(frequency, pattern) ?: false
             return true
         } catch (e: Exception) {
             Log.e("BuiltInIrBlaster", "Error sending IR signal", e)
@@ -27,6 +27,6 @@ class BuiltInIrBlaster(private val context: Context) : IrBlaster {
     }
 
     override fun isAvailable(): Boolean {
-        return irManager?.hasIrEmitter() ?: false
+        return irManager?.hasIrEmitter() == true
     }
 }

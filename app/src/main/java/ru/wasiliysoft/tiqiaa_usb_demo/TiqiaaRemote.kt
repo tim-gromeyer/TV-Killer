@@ -7,6 +7,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.hardware.usb.*
 import android.util.Log
+import androidx.core.content.ContextCompat
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
@@ -115,7 +116,7 @@ class TiqiaaUsbDriver(private val context: Context) : IrBlaster {
      * @param freq IR carrier frequency in Hz
      * @param pulses List of pulse and space durations in microseconds (alternating pulse, space)
      */
-    override fun sendIrSignal(freq: Int, pulses: List<Int>): Boolean {
+    override fun sendIrSignal(freq: Int, pulses: IntArray): Boolean {
         Log.d(TAG, "sendIrSignal called with freq=$freq, pulses=${pulses.size} elements")
         if (!sendCmd(CMD_IDLE_MODE, getCmdId()) || !sendCmd(CMD_SEND_MODE, getCmdId())) {
             Log.e(TAG, "Failed to reset device state before sending IR signal")
@@ -160,7 +161,7 @@ class TiqiaaUsbDriver(private val context: Context) : IrBlaster {
     private fun requestPermission(): Boolean {
         val permissionIntent = PendingIntent.getBroadcast(
             context, 0, Intent(ACTION_USB_PERMISSION),
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE or PendingIntent.FLAG_NO_CREATE
         )
         val latch = CountDownLatch(1)
         var permissionGranted = false
@@ -175,7 +176,12 @@ class TiqiaaUsbDriver(private val context: Context) : IrBlaster {
             }
         }
 
-        context.registerReceiver(receiver, IntentFilter(ACTION_USB_PERMISSION))
+        ContextCompat.registerReceiver(
+            context,
+            receiver,
+            IntentFilter(ACTION_USB_PERMISSION),
+            ContextCompat.RECEIVER_NOT_EXPORTED
+        )
         usbManager.requestPermission(device, permissionIntent)
         Log.d(TAG, "Permission requested for device")
 

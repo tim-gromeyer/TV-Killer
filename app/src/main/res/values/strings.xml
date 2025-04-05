@@ -2,8 +2,13 @@
     <string name="app_name">TV-Killer</string>
     <string name="patterns_loaded">Patterns loaded: %ds</string>
     <string name="packet_number">Send packet number %ds, took %ds ms</string>
-    <string name="completed_all_patterns">Completed all %ds patterns in %dsms</string>
+    <string name="completed_all_patterns">Completed all %1$d patterns in %2$dms</string>
     <string name="stop">Stop</string>
     <string name="transmit">Transmit</string>
     <string name="idle">Idle</string>
+    <string name="transmission_stopped">Transmission stopped</string>
+    <string name="transmitting">Transmitting…</string>
+    <string name="transmitting_pattern_of">Transmitting pattern %1$d of %2$d</string>
+    <string name="transmission_failed">Transmission failed</string>
+    <string name="transmission_complete_in_ms">Transmission complete in %1$dms</string>
 </resources>
