@@ -10,7 +10,7 @@ import android.util.Log
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
-class TiqiaaUsbDriver(private val context: Context) {
+class TiqiaaUsbDriver(private val context: Context) : IrBlaster {
     private val usbManager: UsbManager = context.getSystemService(Context.USB_SERVICE) as UsbManager
     private var device: UsbDevice? = null
     private var connection: UsbDeviceConnection? = null
@@ -51,7 +51,7 @@ class TiqiaaUsbDriver(private val context: Context) {
      * Initializes the USB driver by finding the device, requesting permission if necessary,
      * and setting up the connection and endpoints.
      */
-    fun init(): Boolean {
+    override fun init(): Boolean {
         device = findDevice()
         if (device == null) {
             Log.e(TAG, "No compatible USB device found")
@@ -97,7 +97,7 @@ class TiqiaaUsbDriver(private val context: Context) {
     /**
      * Deinitializes the driver by setting the device to idle mode and closing the connection.
      */
-    fun deinit() {
+    override fun deinit() {
         sendCmd(CMD_IDLE_MODE, getCmdId())
         connection?.releaseInterface(device?.getInterface(0))
         connection?.close()
@@ -106,12 +106,16 @@ class TiqiaaUsbDriver(private val context: Context) {
         Log.d(TAG, "USB driver deinitialized")
     }
 
+    override fun isAvailable(): Boolean {
+        return device != null
+    }
+
     /**
      * Sends an IR signal with the specified frequency and pulse durations.
      * @param freq IR carrier frequency in Hz
      * @param pulses List of pulse and space durations in microseconds (alternating pulse, space)
      */
-    fun sendIrSignal(freq: Int, pulses: List<Int>): Boolean {
+    override fun sendIrSignal(freq: Int, pulses: List<Int>): Boolean {
         Log.d(TAG, "sendIrSignal called with freq=$freq, pulses=${pulses.size} elements")
         if (!sendCmd(CMD_IDLE_MODE, getCmdId()) || !sendCmd(CMD_SEND_MODE, getCmdId())) {
             Log.e(TAG, "Failed to reset device state before sending IR signal")

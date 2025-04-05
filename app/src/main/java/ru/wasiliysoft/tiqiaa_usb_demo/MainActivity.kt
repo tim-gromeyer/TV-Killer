@@ -24,7 +24,7 @@ import java.io.IOException
 import kotlin.math.roundToInt
 
 class MainActivity : AppCompatActivity() {
-    private var irDriver: TiqiaaUsbDriver? = null
+    private var irBlaster: IrBlaster? = null
     private val usbManager: UsbManager by lazy { getSystemService(USB_SERVICE) as UsbManager }
     private lateinit var usbBroadCastReceiver: BroadcastReceiver
     private lateinit var irPatterns: List<IrPattern>
@@ -63,7 +63,30 @@ class MainActivity : AppCompatActivity() {
             progressBar.visibility = View.GONE
         }
 
-        initDriver()
+        initBlaster()
+    }
+
+    private fun initBlaster() {
+        // First try to use built-in IR blaster
+        irBlaster = BuiltInIrBlaster(this).also {
+            if (it.init() && it.isAvailable()) {
+                Toast.makeText(this, "Using built-in IR blaster", Toast.LENGTH_SHORT).show()
+                return
+            }
+        }
+
+        // Fall back to USB IR blaster
+        usbBroadCastReceiver = registerReceivers()
+        irBlaster = TiqiaaUsbDriver(this).also {
+            if (it.init()) {
+                Toast.makeText(this, "Using USB IR blaster", Toast.LENGTH_SHORT).show()
+                return
+            }
+        }
+
+        // No IR blaster available
+        Toast.makeText(this, "No IR blaster available", Toast.LENGTH_LONG).show()
+        irBlaster = null
     }
 
     /** Loads IR patterns from JSON and converts them to microseconds */
@@ -109,8 +132,8 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        if (irDriver == null) {
-            Toast.makeText(this, "USB driver not initialized", Toast.LENGTH_SHORT).show()
+        if (irBlaster == null) {
+            Toast.makeText(this, "IR blaster not initialized", Toast.LENGTH_SHORT).show()
             return
         }
 
@@ -131,7 +154,7 @@ class MainActivity : AppCompatActivity() {
                     }
                     try {
                         val startTime = System.currentTimeMillis()
-                        val success = irDriver!!.sendIrSignal(pattern.frequency, pattern.pattern.toList())
+                        val success = irBlaster!!.sendIrSignal(pattern.frequency, pattern.pattern.toList())
                         if (!success) throw Exception("Failed to send IR signal")
                         val duration = System.currentTimeMillis() - startTime
                         withContext(Dispatchers.Main) {
@@ -167,20 +190,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun initDriver() {
-        usbBroadCastReceiver = registerReceivers()
-        irDriver = TiqiaaUsbDriver(this)
-        if (usbManager.deviceList.isNotEmpty()) {
-            if (irDriver!!.init()) {
-                Toast.makeText(this, "USB driver initialized", Toast.LENGTH_SHORT).show()
-            } else {
-                Toast.makeText(this, "Failed to initialize USB driver", Toast.LENGTH_LONG).show()
-            }
-        } else {
-            Toast.makeText(this, "Insert USB IR blaster", Toast.LENGTH_LONG).show()
-        }
-    }
-
     @SuppressLint("UnspecifiedRegisterReceiverFlag")
     private fun registerReceivers(): BroadcastReceiver {
         val usbBroadCastReceiver = getUsbBroadCastReceiver()
@@ -204,31 +213,42 @@ class MainActivity : AppCompatActivity() {
         override fun onReceive(context: Context, intent: Intent) {
             when (intent.action) {
                 UsbManager.ACTION_USB_DEVICE_ATTACHED -> {
-                    Toast.makeText(context, "USB device inserted", Toast.LENGTH_SHORT).show()
-                    if (irDriver == null) irDriver = TiqiaaUsbDriver(context)
-                    if (irDriver!!.init()) {
-                        Toast.makeText(context, "USB driver initialized", Toast.LENGTH_SHORT).show()
-                    } else {
-                        Toast.makeText(context, "Failed to initialize USB driver", Toast.LENGTH_LONG).show()
+                    // Only handle USB events if we're not using built-in IR blaster
+                    if (irBlaster !is BuiltInIrBlaster) {
+                        Toast.makeText(context, "USB device inserted", Toast.LENGTH_SHORT).show()
+                        irBlaster = TiqiaaUsbDriver(context).also {
+                            if (it.init()) {
+                                Toast.makeText(context, "USB driver initialized", Toast.LENGTH_SHORT).show()
+                            } else {
+                                Toast.makeText(context, "Failed to initialize USB driver", Toast.LENGTH_LONG).show()
+                            }
+                        }
                     }
                 }
                 UsbManager.ACTION_USB_DEVICE_DETACHED -> {
-                    irDriver?.deinit()
-                    irDriver = null
-                    Toast.makeText(context, "USB device removed", Toast.LENGTH_SHORT).show()
+                    if (irBlaster is TiqiaaUsbDriver) {
+                        irBlaster?.deinit()
+                        irBlaster = null
+                        Toast.makeText(context, "USB device removed", Toast.LENGTH_SHORT).show()
+                        // Try to fall back to built-in IR blaster if available
+                        initBlaster()
+                    }
                 }
                 TiqiaaUsbDriver.ACTION_USB_PERMISSION -> {
                     synchronized(this) {
                         val device = intent.getParcelableExtra<UsbDevice>(UsbManager.EXTRA_DEVICE)
                         if (intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false) && device != null) {
-                            if (irDriver == null) irDriver = TiqiaaUsbDriver(context)
-                            if (irDriver!!.init()) {
-                                Toast.makeText(context, "USB device permission granted and driver initialized", Toast.LENGTH_SHORT).show()
-                            } else {
-                                Toast.makeText(context, "Failed to initialize USB driver after permission", Toast.LENGTH_LONG).show()
+                            irBlaster = TiqiaaUsbDriver(context).also {
+                                if (it.init()) {
+                                    Toast.makeText(context, "USB device permission granted and driver initialized", Toast.LENGTH_SHORT).show()
+                                } else {
+                                    Toast.makeText(context, "Failed to initialize USB driver after permission", Toast.LENGTH_LONG).show()
+                                }
                             }
                         } else {
                             Toast.makeText(context, "USB permission denied", Toast.LENGTH_LONG).show()
+                            // Try to fall back to built-in IR blaster if available
+                            initBlaster()
                         }
                     }
                 }
@@ -238,7 +258,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
-        irDriver?.deinit()
+        irBlaster?.deinit()
         if (this::usbBroadCastReceiver.isInitialized) {
             try {
                 unregisterReceiver(usbBroadCastReceiver)
@@ -247,4 +267,5 @@ class MainActivity : AppCompatActivity() {
             }
         }
     }
+
 }

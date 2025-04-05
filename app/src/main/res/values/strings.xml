@@ -3,4 +3,7 @@
     <string name="patterns_loaded">Patterns loaded: %ds</string>
     <string name="packet_number">Send packet number %ds, took %ds ms</string>
     <string name="completed_all_patterns">Completed all %ds patterns in %dsms</string>
+    <string name="stop">Stop</string>
+    <string name="transmit">Transmit</string>
+    <string name="idle">Idle</string>
 </resources>

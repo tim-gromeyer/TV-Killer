@@ -2,8 +2,13 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
-    <uses-permission android:name="android.permission.USB_PERMISSION" />
-    <uses-feature android:name="android.hardware.usb.host" />
+    <!-- For external blasters -->
+    <uses-permission android:name="android.permission.USB_PERMISSION" android:required="false" />
+    <uses-feature android:name="android.hardware.usb.host" android:required="false" />
+
+    <!-- For internal ir blaster -->
+    <uses-permission android:name="android.permission.TRANSMIT_IR" android:required="false" />
+    <uses-feature android:name="android.hardware.consumerir" android:required="false" />
 
     <application
         android:allowBackup="true"
