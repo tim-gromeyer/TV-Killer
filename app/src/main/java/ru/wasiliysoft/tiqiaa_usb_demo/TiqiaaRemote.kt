@@ -8,8 +8,6 @@ import android.content.IntentFilter
 import android.hardware.usb.*
 import android.util.Log
 import androidx.core.content.ContextCompat
-import java.util.concurrent.CountDownLatch
-import java.util.concurrent.TimeUnit
 
 class TiqiaaUsbDriver(private val context: Context) : IrBlaster {
     private val usbManager: UsbManager = context.getSystemService(Context.USB_SERVICE) as UsbManager
@@ -19,6 +17,9 @@ class TiqiaaUsbDriver(private val context: Context) : IrBlaster {
     private var endpointOut: UsbEndpoint? = null
     private var packetIdx = 0
     private var cmdId: Byte = 1
+    private var isInitialized = false // Tracks if the driver is fully initialized
+    private var permissionReceiver: BroadcastReceiver? = null
+    private var listener: InitializationListener? = null
 
     companion object {
         private const val TAG = "TiqiaaUsbDriver"
@@ -48,28 +49,77 @@ class TiqiaaUsbDriver(private val context: Context) : IrBlaster {
 
     data class UsbDeviceId(val vendor: Int, val product: Int)
 
-    /**
-     * Initializes the USB driver by finding the device, requesting permission if necessary,
-     * and setting up the connection and endpoints.
-     */
+    /** Listener to notify when initialization completes or fails */
+    interface InitializationListener {
+        fun onInitialized()
+        fun onInitializationFailed(error: String)
+    }
+
+    fun setInitializationListener(listener: InitializationListener) {
+        this.listener = listener
+    }
+
     override fun init(): Boolean {
         device = findDevice()
         if (device == null) {
             Log.e(TAG, "No compatible USB device found")
+            listener?.onInitializationFailed("No compatible USB device found")
             return false
         }
 
-        if (!usbManager.hasPermission(device)) {
-            if (!requestPermission()) {
-                Log.e(TAG, "USB permission not granted")
-                return false
+        if (usbManager.hasPermission(device)) {
+            initializeConnection()
+            return isInitialized
+        } else {
+            requestPermissionAsync()
+            return false // Initialization is pending permission
+        }
+    }
+
+    private fun requestPermissionAsync() {
+        if (permissionReceiver != null) {
+            Log.d(TAG, "Permission request already in progress")
+            return
+        }
+
+        val permissionIntent = PendingIntent.getBroadcast(
+            context, 0, Intent(ACTION_USB_PERMISSION),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
+        )
+
+        permissionReceiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context, intent: Intent) {
+                if (ACTION_USB_PERMISSION == intent.action && device != null) {
+                    if (usbManager.hasPermission(device)) {
+                        initializeConnection()
+                    } else {
+                        isInitialized = false
+                        listener?.onInitializationFailed("USB permission denied")
+                        Log.e(TAG, "USB permission denied")
+                    }
+                    context.unregisterReceiver(this)
+                    permissionReceiver = null
+                }
             }
         }
 
+        ContextCompat.registerReceiver(
+            context,
+            permissionReceiver,
+            IntentFilter(ACTION_USB_PERMISSION),
+            ContextCompat.RECEIVER_NOT_EXPORTED
+        )
+
+        usbManager.requestPermission(device, permissionIntent)
+        Log.d(TAG, "Permission requested for device")
+    }
+
+    private fun initializeConnection() {
         connection = usbManager.openDevice(device)
         if (connection == null) {
             Log.e(TAG, "Failed to open USB device")
-            return false
+            listener?.onInitializationFailed("Failed to open USB device")
+            return
         }
 
         val usbInterface = device!!.getInterface(0)
@@ -87,49 +137,63 @@ class TiqiaaUsbDriver(private val context: Context) : IrBlaster {
 
         if (endpointIn == null || endpointOut == null) {
             Log.e(TAG, "Failed to find bulk IN or OUT endpoints")
+            listener?.onInitializationFailed("Failed to find bulk IN or OUT endpoints")
             deinit()
-            return false
+            return
         }
 
-        Log.d(TAG, "USB initialization successful, sending initial commands")
-        return sendCmd(CMD_IDLE_MODE, getCmdId()) && sendCmd(CMD_SEND_MODE, getCmdId())
+        // Send initial commands to ensure device is ready
+        val success = sendCmd(CMD_IDLE_MODE, getCmdId()) && sendCmd(CMD_SEND_MODE, getCmdId())
+        if (!success) {
+            Log.e(TAG, "Failed to send initial commands")
+            listener?.onInitializationFailed("Failed to send initial commands")
+            deinit()
+            return
+        }
+
+        isInitialized = true
+        Log.d(TAG, "USB initialization successful")
+        listener?.onInitialized()
     }
 
-    /**
-     * Deinitializes the driver by setting the device to idle mode and closing the connection.
-     */
     override fun deinit() {
-        sendCmd(CMD_IDLE_MODE, getCmdId())
+        if (connection != null) {
+            sendCmd(CMD_IDLE_MODE, getCmdId())
+        }
         connection?.releaseInterface(device?.getInterface(0))
         connection?.close()
         connection = null
         device = null
+        if (permissionReceiver != null) {
+            context.unregisterReceiver(permissionReceiver)
+            permissionReceiver = null
+        }
+        isInitialized = false
         Log.d(TAG, "USB driver deinitialized")
     }
 
-    override fun isAvailable(): Boolean {
-        return device != null
-    }
+    override fun isAvailable(): Boolean = device != null
 
-    /**
-     * Sends an IR signal with the specified frequency and pulse durations.
-     * @param freq IR carrier frequency in Hz
-     * @param pulses List of pulse and space durations in microseconds (alternating pulse, space)
-     */
-    override fun sendIrSignal(freq: Int, pulses: IntArray): Boolean {
-        Log.d(TAG, "sendIrSignal called with freq=$freq, pulses=${pulses.size} elements")
+    override fun isReady(): Boolean = isInitialized
+
+    override fun sendIrSignal(frequency: Int, pattern: IntArray): Boolean {
+        if (!isInitialized) {
+            Log.e(TAG, "USB connection not initialized")
+            return false
+        }
+        Log.d(TAG, "sendIrSignal called with freq=$frequency, pulses=${pattern.size} elements")
         if (!sendCmd(CMD_IDLE_MODE, getCmdId()) || !sendCmd(CMD_SEND_MODE, getCmdId())) {
             Log.e(TAG, "Failed to reset device state before sending IR signal")
             return false
         }
         Log.d(TAG, "Device reset to idle and send mode")
 
-        val buf = ByteArray(1017) // Increased to 1017 bytes
+        val buf = ByteArray(1017)
         var bufSize = 0
 
-        for (i in pulses.indices step 2) {
-            val pulse = pulses[i]
-            val space = if (i + 1 < pulses.size) pulses[i + 1] else 0
+        for (i in pattern.indices step 2) {
+            val pulse = pattern[i]
+            val space = if (i + 1 < pattern.size) pattern[i + 1] else 0
             Log.v(TAG, "Processing pulse=$pulse, space=$space at index $i")
             bufSize = writePulse(buf, bufSize, true, pulse)
             if (bufSize < 0) {
@@ -146,7 +210,7 @@ class TiqiaaUsbDriver(private val context: Context) : IrBlaster {
         }
 
         Log.d(TAG, "Pulse buffer prepared, size=$bufSize")
-        return sendIr(freq, buf, bufSize)
+        return sendIr(frequency, buf, bufSize)
     }
 
     private fun findDevice(): UsbDevice? {
@@ -156,38 +220,6 @@ class TiqiaaUsbDriver(private val context: Context) : IrBlaster {
         }
         Log.d(TAG, "findDevice: ${if (foundDevice != null) "Device found" else "No device found"}")
         return foundDevice
-    }
-
-    private fun requestPermission(): Boolean {
-        val permissionIntent = PendingIntent.getBroadcast(
-            context, 0, Intent(ACTION_USB_PERMISSION),
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE or PendingIntent.FLAG_NO_CREATE
-        )
-        val latch = CountDownLatch(1)
-        var permissionGranted = false
-
-        val receiver = object : BroadcastReceiver() {
-            override fun onReceive(context: Context, intent: Intent) {
-                if (ACTION_USB_PERMISSION == intent.action && device != null) {
-                    permissionGranted = usbManager.hasPermission(device)
-                    Log.d(TAG, "Permission request result: $permissionGranted")
-                    latch.countDown()
-                }
-            }
-        }
-
-        ContextCompat.registerReceiver(
-            context,
-            receiver,
-            IntentFilter(ACTION_USB_PERMISSION),
-            ContextCompat.RECEIVER_NOT_EXPORTED
-        )
-        usbManager.requestPermission(device, permissionIntent)
-        Log.d(TAG, "Permission requested for device")
-
-        latch.await(10, TimeUnit.SECONDS)
-        context.unregisterReceiver(receiver)
-        return permissionGranted
     }
 
     private fun getCmdId(): Byte {

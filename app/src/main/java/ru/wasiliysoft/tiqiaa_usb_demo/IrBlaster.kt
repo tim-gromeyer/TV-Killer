@@ -5,4 +5,5 @@ interface IrBlaster {
     fun deinit()
     fun sendIrSignal(frequency: Int, pattern: IntArray): Boolean
     fun isAvailable(): Boolean
+    fun isReady(): Boolean // Added to check readiness
 }

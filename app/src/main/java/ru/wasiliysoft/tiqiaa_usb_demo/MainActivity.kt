@@ -43,9 +43,10 @@ class MainActivity : AppCompatActivity() {
         progressBar = findViewById(R.id.progressBar)
         patternsCountText = findViewById(R.id.patternsCountText)
         transmissionStatus = findViewById(R.id.transmissionStatus)
-        startButton = findViewById<Button>(R.id.startButton)
+        startButton = findViewById(R.id.startButton)
         stopButton = findViewById(R.id.stopButton)
         stopButton.isEnabled = false // Initially disabled
+        startButton.isEnabled = false // Initially disabled until blaster is ready
 
         // Load patterns from JSON file
         loadPatternsFromJson()
@@ -58,38 +59,56 @@ class MainActivity : AppCompatActivity() {
             transmissionJob?.cancel()
             Toast.makeText(this, "Transmission stopped", Toast.LENGTH_SHORT).show()
             transmissionStatus.text = getString(R.string.transmission_stopped)
-            startButton.isEnabled = true
+            startButton.isEnabled = irBlaster?.isReady() == true
             stopButton.isEnabled = false
             progressBar.visibility = View.GONE
         }
 
+        usbBroadCastReceiver = registerReceivers() // Make sure this is only called once
         initBlaster()
     }
 
     private fun initBlaster() {
-        // First try to use built-in IR blaster
+        // First try built-in IR blaster
         irBlaster = BuiltInIrBlaster(this).also {
             if (it.init() && it.isAvailable()) {
+                startButton.isEnabled = true
                 Toast.makeText(this, "Using built-in IR blaster", Toast.LENGTH_SHORT).show()
                 return
             }
         }
 
         // Fall back to USB IR blaster
-        usbBroadCastReceiver = registerReceivers()
-        irBlaster = TiqiaaUsbDriver(this).also {
-            if (it.init()) {
-                Toast.makeText(this, "Using USB IR blaster", Toast.LENGTH_SHORT).show()
-                return
-            }
-        }
+        irBlaster = TiqiaaUsbDriver(this).also { usbDriver ->
+            usbDriver.setInitializationListener(object : TiqiaaUsbDriver.InitializationListener {
+                override fun onInitialized() {
+                    runOnUiThread {
+                        startButton.isEnabled = true
+                        Toast.makeText(this@MainActivity, "USB IR blaster ready", Toast.LENGTH_SHORT).show()
+                    }
+                }
 
-        // No IR blaster available
-        Toast.makeText(this, "No IR blaster available", Toast.LENGTH_LONG).show()
-        irBlaster = null
+                override fun onInitializationFailed(error: String) {
+                    runOnUiThread {
+                        Toast.makeText(this@MainActivity, "USB IR blaster failed: $error", Toast.LENGTH_LONG).show()
+                        startButton.isEnabled = false
+                        // Try falling back to built-in if available
+                        irBlaster = BuiltInIrBlaster(this@MainActivity).also {
+                            if (it.init() && it.isAvailable()) {
+                                startButton.isEnabled = true
+                                Toast.makeText(this@MainActivity, "Switched to built-in IR blaster", Toast.LENGTH_SHORT).show()
+                            } else {
+                                irBlaster = null
+                                Toast.makeText(this@MainActivity, "No IR blaster available", Toast.LENGTH_LONG).show()
+                            }
+                        }
+                    }
+                }
+            })
+            usbDriver.init() // Starts async permission request if needed
+        }
     }
 
-    /** Loads IR patterns from JSON and converts them to microseconds */
     private fun loadPatternsFromJson() {
         try {
             val inputStream = resources.openRawResource(R.raw.ir_patterns)
@@ -106,7 +125,6 @@ class MainActivity : AppCompatActivity() {
             val totalPatterns = irPatterns.sumOf { it.patterns.size } + irPatterns.size
             patternsCountText.text = getString(R.string.patterns_loaded, totalPatterns)
             progressBar.max = totalPatterns
-
         } catch (e: IOException) {
             e.printStackTrace()
             Toast.makeText(this, "Failed to load IR patterns", Toast.LENGTH_LONG).show()
@@ -115,7 +133,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /** Converts a pattern from carrier cycles to microseconds */
     private fun convertPatternToMicroseconds(pattern: Pattern?): Pattern? {
         if (pattern == null) return null
         val frequency = pattern.frequency
@@ -132,16 +149,16 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        if (irBlaster == null) {
-            Toast.makeText(this, "IR blaster not initialized", Toast.LENGTH_SHORT).show()
+        if (irBlaster == null || !irBlaster!!.isReady()) {
+            Toast.makeText(this, "IR blaster not ready", Toast.LENGTH_SHORT).show()
             return
         }
 
         progressBar.visibility = View.VISIBLE
         progressBar.progress = 0
         transmissionStatus.text = getString(R.string.transmitting)
-        startButton.isEnabled = false // Disable Transmit button
-        stopButton.isEnabled = true // Enable Stop button
+        startButton.isEnabled = false
+        stopButton.isEnabled = true
 
         transmissionJob = CoroutineScope(Dispatchers.IO).launch {
             var currentProgress = 0
@@ -162,16 +179,11 @@ class MainActivity : AppCompatActivity() {
                         withContext(Dispatchers.Main) {
                             currentProgress++
                             progressBar.progress = currentProgress
-                            // Optionally keep patternsCountText for total patterns only
                             patternsCountText.text = getString(R.string.patterns_loaded, progressBar.max)
                         }
                     } catch (e: Exception) {
                         withContext(Dispatchers.Main) {
-                            Toast.makeText(
-                                this@MainActivity,
-                                "Transmission failed: ${e.message}",
-                                Toast.LENGTH_SHORT
-                            ).show()
+                            Toast.makeText(this@MainActivity, "Transmission failed: ${e.message}", Toast.LENGTH_SHORT).show()
                             transmissionStatus.text = getString(R.string.transmission_failed)
                             startButton.isEnabled = true
                             stopButton.isEnabled = false
@@ -184,8 +196,7 @@ class MainActivity : AppCompatActivity() {
 
             val overallDuration = System.currentTimeMillis() - overallStartTime
             withContext(Dispatchers.Main) {
-                transmissionStatus.text =
-                    getString(R.string.transmission_complete_in_ms, overallDuration)
+                transmissionStatus.text = getString(R.string.transmission_complete_in_ms, overallDuration)
                 startButton.isEnabled = true
                 stopButton.isEnabled = false
                 progressBar.visibility = View.GONE
@@ -198,8 +209,8 @@ class MainActivity : AppCompatActivity() {
         val usbBroadCastReceiver = getUsbBroadCastReceiver()
         val intentFilters = arrayOf(
             IntentFilter(UsbManager.ACTION_USB_DEVICE_ATTACHED),
-            IntentFilter(UsbManager.ACTION_USB_DEVICE_DETACHED),
-            IntentFilter(TiqiaaUsbDriver.ACTION_USB_PERMISSION)
+            IntentFilter(UsbManager.ACTION_USB_DEVICE_DETACHED)
+            // Removed ACTION_USB_PERMISSION since it's handled in TiqiaaUsbDriver
         )
 
         intentFilters.forEach { filter ->
@@ -216,12 +227,10 @@ class MainActivity : AppCompatActivity() {
         override fun onReceive(context: Context, intent: Intent) {
             when (intent.action) {
                 UsbManager.ACTION_USB_DEVICE_ATTACHED -> {
-                    // Only handle USB events if we're not using built-in IR blaster
                     if (irBlaster !is BuiltInIrBlaster) {
                         Toast.makeText(context, "USB device inserted", Toast.LENGTH_SHORT).show()
-                        irBlaster = TiqiaaUsbDriver(context).also {
-                            it.init()
-                        }
+                        irBlaster?.deinit() // Clean up any existing instance
+                        initBlaster() // Reinitialize to handle the new device
                     }
                 }
                 UsbManager.ACTION_USB_DEVICE_DETACHED -> {
@@ -229,31 +238,7 @@ class MainActivity : AppCompatActivity() {
                         irBlaster?.deinit()
                         irBlaster = null
                         Toast.makeText(context, "USB device removed", Toast.LENGTH_SHORT).show()
-                        // Try to fall back to built-in IR blaster if available
-                        initBlaster()
-                    }
-                }
-                TiqiaaUsbDriver.ACTION_USB_PERMISSION -> {
-                    synchronized(this) {
-                        val device = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                            intent.getParcelableExtra<UsbDevice>(UsbManager.EXTRA_DEVICE, UsbDevice::class.java)
-                        } else {
-                            @Suppress("DEPRECATION")
-                            intent.getParcelableExtra<UsbDevice>(UsbManager.EXTRA_DEVICE)
-                        }
-                        if (intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false) && device != null) {
-                            irBlaster = TiqiaaUsbDriver(context).also {
-                                if (it.init()) {
-                                    Toast.makeText(context, "USB device permission granted and driver initialized", Toast.LENGTH_SHORT).show()
-                                } else {
-                                    Toast.makeText(context, "Failed to initialize USB driver after permission", Toast.LENGTH_LONG).show()
-                                }
-                            }
-                        } else {
-                            Toast.makeText(context, "USB permission denied", Toast.LENGTH_LONG).show()
-                            // Try to fall back to built-in IR blaster if available
-                            initBlaster()
-                        }
+                        initBlaster() // Try to fall back to built-in
                     }
                 }
             }
@@ -271,5 +256,4 @@ class MainActivity : AppCompatActivity() {
             }
         }
     }
-
 }
