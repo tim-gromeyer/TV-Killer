@@ -5,12 +5,12 @@ plugins {
 
 android {
     namespace = "ru.wasiliysoft.tiqiaa_usb_demo"
-    compileSdk = 33
+    compileSdk = 35
 
     defaultConfig {
         applicationId = "ru.wasiliysoft.tiqiaa_usb_demo"
         minSdk = 24
-        targetSdk = 33
+        targetSdk = 35
         versionCode = 1
         versionName = "1.0"
 
