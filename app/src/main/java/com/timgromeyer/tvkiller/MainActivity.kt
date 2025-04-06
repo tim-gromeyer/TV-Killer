@@ -141,7 +141,10 @@ class MainActivity : AppCompatActivity() {
         val convertedPattern = pattern.pattern.map { cycles ->
             (cycles * periodUs).roundToInt()
         }.toIntArray()
-        return Pattern(frequency, convertedPattern, pattern.comment)
+        // Avoid "Non-positive IR slice" error by removing 0 values from the pattern
+        val nonZeroPattern = convertedPattern.filter { it > 0 }.toIntArray()
+        if (nonZeroPattern.isEmpty()) return null
+        return Pattern(frequency, nonZeroPattern, pattern.comment)
     }
 
     private fun sendAllPatterns() {
