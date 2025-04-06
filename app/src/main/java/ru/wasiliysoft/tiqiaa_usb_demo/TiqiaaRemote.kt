@@ -82,9 +82,16 @@ class TiqiaaUsbDriver(private val context: Context) : IrBlaster {
             return
         }
 
+        // Make the Intent explicit by specifying the receiver class
+        val intent = Intent(ACTION_USB_PERMISSION).apply {
+            setPackage(context.packageName) // Makes it explicit
+        }
+
         val permissionIntent = PendingIntent.getBroadcast(
-            context, 0, Intent(ACTION_USB_PERMISSION),
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
+            context,
+            0,
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE // MUTABLE is okay with explicit Intent
         )
 
         permissionReceiver = object : BroadcastReceiver() {
