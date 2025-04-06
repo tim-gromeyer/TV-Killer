@@ -213,7 +213,7 @@ class TiqiaaUsbDriver(private val context: Context) : IrBlaster {
         return sendIr(frequency, buf, bufSize)
     }
 
-    private fun findDevice(): UsbDevice? {
+    fun findDevice(): UsbDevice? {
         val deviceList = usbManager.deviceList
         val foundDevice = deviceList.values.find { device ->
             compatibleDevices.any { it.vendor == device.vendorId && it.product == device.productId }

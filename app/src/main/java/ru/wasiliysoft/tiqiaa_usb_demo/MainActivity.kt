@@ -5,7 +5,6 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
-import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
 import android.os.Build
 import android.os.Bundle
@@ -90,7 +89,9 @@ class MainActivity : AppCompatActivity() {
 
                 override fun onInitializationFailed(error: String) {
                     runOnUiThread {
-                        Toast.makeText(this@MainActivity, "USB IR blaster failed: $error", Toast.LENGTH_LONG).show()
+                        if (usbDriver.findDevice() != null) {
+                            Toast.makeText(this@MainActivity, "USB IR blaster failed: $error", Toast.LENGTH_LONG).show()
+                        }
                         startButton.isEnabled = false
                         // Try falling back to built-in if available
                         irBlaster = BuiltInIrBlaster(this@MainActivity).also {
