@@ -1,4 +1,4 @@
-package ru.wasiliysoft.tiqiaa_usb_demo
+package com.timgromeyer.tvkiller
 
 data class IrPattern(
     val designation: String,

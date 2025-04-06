@@ -4,11 +4,11 @@ plugins {
 }
 
 android {
-    namespace = "ru.wasiliysoft.tiqiaa_usb_demo"
+    namespace = "com.timgromeyer.tvkiller"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "ru.wasiliysoft.tiqiaa_usb_demo"
+        applicationId = "com.timgromeyer.tvkiller"
         minSdk = 24
         targetSdk = 35
         versionCode = 1

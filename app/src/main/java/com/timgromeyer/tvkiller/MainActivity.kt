@@ -1,4 +1,4 @@
-package ru.wasiliysoft.tiqiaa_usb_demo
+package com.timgromeyer.tvkiller
 
 import android.annotation.SuppressLint
 import android.content.BroadcastReceiver
