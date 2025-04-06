@@ -73,9 +73,9 @@ class MainActivity : AppCompatActivity() {
             if (it.init() && it.isAvailable()) {
                 startButton.isEnabled = true
                 Toast.makeText(this, "Using built-in IR blaster", Toast.LENGTH_SHORT).show()
-                return
             }
         }
+        if (irBlaster?.isReady() == true) return
 
         // Fall back to USB IR blaster
         irBlaster = TiqiaaUsbDriver(this).also { usbDriver ->
