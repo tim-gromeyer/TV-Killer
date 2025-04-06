@@ -44,6 +44,12 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
+    - name: Download build artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: build-artifacts
+        path: app/build/outputs/
+
     - name: Create GitHub Release
       id: create_release
       uses: softprops/action-gh-release@v2
@@ -53,4 +59,5 @@ jobs:
         prerelease: false
         draft: false
         files: |
-          app/build/outputs/apk/debug/app-debug.apk
+          app/build/outputs/apk/**/*.apk
+          app/build/outputs/bundle/**/*.aab
