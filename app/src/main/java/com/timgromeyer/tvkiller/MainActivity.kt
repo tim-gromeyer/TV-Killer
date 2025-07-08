@@ -9,14 +9,15 @@ import android.hardware.usb.UsbManager
 import android.os.Build
 import android.os.Bundle
 import android.view.View
-import android.widget.Button
-import android.widget.ProgressBar
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 import com.google.android.gms.ads.AdRequest
 import com.google.android.gms.ads.AdView
 import com.google.android.gms.ads.MobileAds
+import com.google.android.material.button.MaterialButton
+import com.google.android.material.progressindicator.LinearProgressIndicator
 import com.google.gson.Gson
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -30,11 +31,11 @@ class MainActivity : AppCompatActivity() {
     private var irBlaster: IrBlaster? = null
     private lateinit var usbBroadCastReceiver: BroadcastReceiver
     private lateinit var irPatterns: List<IrPattern>
-    private lateinit var progressBar: ProgressBar
-    private lateinit var patternsCountText: TextView
+    private lateinit var progressBar: LinearProgressIndicator
+    
     private lateinit var transmissionStatus: TextView
-    private lateinit var stopButton: Button
-    private lateinit var startButton: Button
+    private lateinit var stopButton: MaterialButton
+    private lateinit var startButton: MaterialButton
     private var transmissionJob: Job? = null
     private lateinit var adView: AdView
 
@@ -44,7 +45,7 @@ class MainActivity : AppCompatActivity() {
 
         // Initialize UI elements
         progressBar = findViewById(R.id.progressBar)
-        patternsCountText = findViewById(R.id.patternsCountText)
+        
         transmissionStatus = findViewById(R.id.transmissionStatus)
         startButton = findViewById(R.id.startButton)
         stopButton = findViewById(R.id.stopButton)
@@ -134,13 +135,13 @@ class MainActivity : AppCompatActivity() {
             }
 
             val totalPatterns = irPatterns.sumOf { it.patterns.size } + irPatterns.size
-            patternsCountText.text = getString(R.string.patterns_loaded, totalPatterns)
+            transmissionStatus.text = getString(R.string.patterns_loaded, totalPatterns)
             progressBar.max = totalPatterns
         } catch (e: IOException) {
             e.printStackTrace()
             Toast.makeText(this, "Failed to load IR patterns", Toast.LENGTH_LONG).show()
             irPatterns = emptyList()
-            patternsCountText.text = getString(R.string.patterns_loaded, 0)
+            transmissionStatus.text = getString(R.string.patterns_loaded, 0)
         }
     }
 
@@ -193,7 +194,7 @@ class MainActivity : AppCompatActivity() {
                         withContext(Dispatchers.Main) {
                             currentProgress++
                             progressBar.progress = currentProgress
-                            patternsCountText.text = getString(R.string.patterns_loaded, progressBar.max)
+                            transmissionStatus.text = getString(R.string.patterns_loaded, progressBar.max)
                         }
                     } catch (e: Exception) {
                         withContext(Dispatchers.Main) {
@@ -220,11 +221,10 @@ class MainActivity : AppCompatActivity() {
 
     @SuppressLint("UnspecifiedRegisterReceiverFlag")
     private fun registerReceivers(): BroadcastReceiver {
-        val usbBroadCastReceiver = getUsbBroadCastReceiver()
+        usbBroadCastReceiver = getUsbBroadCastReceiver()
         val intentFilters = arrayOf(
             IntentFilter(UsbManager.ACTION_USB_DEVICE_ATTACHED),
             IntentFilter(UsbManager.ACTION_USB_DEVICE_DETACHED)
-            // Removed ACTION_USB_PERMISSION since it's handled in TiqiaaUsbDriver
         )
 
         intentFilters.forEach { filter ->
@@ -242,7 +242,7 @@ class MainActivity : AppCompatActivity() {
             when (intent.action) {
                 UsbManager.ACTION_USB_DEVICE_ATTACHED -> {
                     if (irBlaster !is BuiltInIrBlaster) {
-                        Toast.makeText(context, "USB device inserted", Toast.LENGTH_SHORT).show()
+                        // Toast.makeText(context, "USB device inserted", Toast.LENGTH_SHORT).show()
                         irBlaster?.deinit() // Clean up any existing instance
                         initBlaster() // Reinitialize to handle the new device
                     }
@@ -251,7 +251,7 @@ class MainActivity : AppCompatActivity() {
                     if (irBlaster is TiqiaaUsbDriver) {
                         irBlaster?.deinit()
                         irBlaster = null
-                        Toast.makeText(context, "USB device removed", Toast.LENGTH_SHORT).show()
+                        // Toast.makeText(context, "USB device removed", Toast.LENGTH_SHORT).show()
                         initBlaster() // Try to fall back to built-in
                     }
                 }

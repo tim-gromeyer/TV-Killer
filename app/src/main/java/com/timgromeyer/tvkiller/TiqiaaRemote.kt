@@ -23,7 +23,7 @@ class TiqiaaUsbDriver(private val context: Context) : IrBlaster {
 
     companion object {
         private const val TAG = "TiqiaaUsbDriver"
-        const val ACTION_USB_PERMISSION = "com.example.tiqiaa.USB_PERMISSION"
+        private const val ACTION_USB_PERMISSION = "com.timgromeyer.tvkiller.USB_PERMISSION"
         private const val MAX_USB_FRAG_SIZE = 56
         private const val MAX_USB_PACKET_SIZE = 1024
         private const val MAX_USB_PACKET_IDX = 15
