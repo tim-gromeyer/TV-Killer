@@ -6,7 +6,6 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.hardware.usb.*
-import android.os.Build
 import android.util.Log
 import androidx.core.content.ContextCompat
 
@@ -19,6 +18,7 @@ class TiqiaaUsbDriver(private val context: Context) : IrBlaster {
     private var packetIdx = 0
     private var cmdId: Byte = 1
     private var isInitialized = false // Tracks if the driver is fully initialized
+    private var permissionReceiver: BroadcastReceiver? = null
     private var listener: InitializationListener? = null
 
     companion object {
@@ -71,43 +71,54 @@ class TiqiaaUsbDriver(private val context: Context) : IrBlaster {
             initializeConnection()
             return isInitialized
         } else {
-            requestPermission()
+            requestPermissionAsync()
             return false // Initialization is pending permission
         }
     }
 
-    private fun requestPermission() {
+    private fun requestPermissionAsync() {
+        if (permissionReceiver != null) {
+            Log.d(TAG, "Permission request already in progress")
+            return
+        }
+
+        // Make the Intent explicit by specifying the receiver class
+        val intent = Intent(ACTION_USB_PERMISSION).apply {
+            setPackage(context.packageName) // Makes it explicit
+        }
+
         val permissionIntent = PendingIntent.getBroadcast(
             context,
             0,
-            Intent(ACTION_USB_PERMISSION),
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE // MUTABLE is okay with explicit Intent
         )
-        val filter = IntentFilter(ACTION_USB_PERMISSION)
-        val usbReceiver = object : BroadcastReceiver() {
+
+        permissionReceiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context, intent: Intent) {
-                if (ACTION_USB_PERMISSION == intent.action) {
-                    synchronized(this) {
-                        val usbDevice: UsbDevice? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                            intent.getParcelableExtra(UsbManager.EXTRA_DEVICE, UsbDevice::class.java)
-                        } else {
-                            @Suppress("DEPRECATION")
-                            intent.getParcelableExtra(UsbManager.EXTRA_DEVICE)
-                        }
-                        if (intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)) {
-                            if (usbDevice != null) {
-                                initializeConnection()
-                            }
-                        } else {
-                            listener?.onInitializationFailed("Permission denied for device $usbDevice")
-                        }
+                if (ACTION_USB_PERMISSION == intent.action && device != null) {
+                    if (usbManager.hasPermission(device)) {
+                        initializeConnection()
+                    } else {
+                        isInitialized = false
+                        listener?.onInitializationFailed("USB permission denied")
+                        Log.e(TAG, "USB permission denied")
                     }
                     context.unregisterReceiver(this)
+                    permissionReceiver = null
                 }
             }
         }
-        context.registerReceiver(usbReceiver, filter)
+
+        ContextCompat.registerReceiver(
+            context,
+            permissionReceiver,
+            IntentFilter(ACTION_USB_PERMISSION),
+            ContextCompat.RECEIVER_NOT_EXPORTED
+        )
+
         usbManager.requestPermission(device, permissionIntent)
+        Log.d(TAG, "Permission requested for device")
     }
 
     private fun initializeConnection() {
@@ -160,6 +171,10 @@ class TiqiaaUsbDriver(private val context: Context) : IrBlaster {
         connection?.close()
         connection = null
         device = null
+        if (permissionReceiver != null) {
+            context.unregisterReceiver(permissionReceiver)
+            permissionReceiver = null
+        }
         isInitialized = false
         Log.d(TAG, "USB driver deinitialized")
     }

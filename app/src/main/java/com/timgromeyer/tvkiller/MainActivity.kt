@@ -74,7 +74,7 @@ class MainActivity : AppCompatActivity() {
             progressBar.visibility = View.GONE
         }
 
-        registerReceivers() // Make sure this is only called once
+        usbBroadCastReceiver = registerReceivers() // Make sure this is only called once
         initBlaster()
     }
 
@@ -219,7 +219,8 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun registerReceivers() {
+    @SuppressLint("UnspecifiedRegisterReceiverFlag")
+    private fun registerReceivers(): BroadcastReceiver {
         usbBroadCastReceiver = getUsbBroadCastReceiver()
         val intentFilters = arrayOf(
             IntentFilter(UsbManager.ACTION_USB_DEVICE_ATTACHED),
@@ -227,8 +228,13 @@ class MainActivity : AppCompatActivity() {
         )
 
         intentFilters.forEach { filter ->
-            ContextCompat.registerReceiver(this, usbBroadCastReceiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                registerReceiver(usbBroadCastReceiver, filter, RECEIVER_NOT_EXPORTED)
+            } else {
+                registerReceiver(usbBroadCastReceiver, filter)
+            }
         }
+        return usbBroadCastReceiver
     }
 
     private fun getUsbBroadCastReceiver() = object : BroadcastReceiver() {
@@ -236,7 +242,7 @@ class MainActivity : AppCompatActivity() {
             when (intent.action) {
                 UsbManager.ACTION_USB_DEVICE_ATTACHED -> {
                     if (irBlaster !is BuiltInIrBlaster) {
-                        Toast.makeText(context, "USB device inserted", Toast.LENGTH_SHORT).show()
+                        // Toast.makeText(context, "USB device inserted", Toast.LENGTH_SHORT).show()
                         irBlaster?.deinit() // Clean up any existing instance
                         initBlaster() // Reinitialize to handle the new device
                     }
@@ -245,7 +251,7 @@ class MainActivity : AppCompatActivity() {
                     if (irBlaster is TiqiaaUsbDriver) {
                         irBlaster?.deinit()
                         irBlaster = null
-                        Toast.makeText(context, "USB device removed", Toast.LENGTH_SHORT).show()
+                        // Toast.makeText(context, "USB device removed", Toast.LENGTH_SHORT).show()
                         initBlaster() // Try to fall back to built-in
                     }
                 }
