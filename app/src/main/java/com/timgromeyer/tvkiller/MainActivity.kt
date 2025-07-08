@@ -32,7 +32,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var usbBroadCastReceiver: BroadcastReceiver
     private lateinit var irPatterns: List<IrPattern>
     private lateinit var progressBar: LinearProgressIndicator
-    private lateinit var patternsCountText: TextView
+    
     private lateinit var transmissionStatus: TextView
     private lateinit var stopButton: MaterialButton
     private lateinit var startButton: MaterialButton
@@ -45,7 +45,7 @@ class MainActivity : AppCompatActivity() {
 
         // Initialize UI elements
         progressBar = findViewById(R.id.progressBar)
-        patternsCountText = findViewById(R.id.patternsCountText)
+        
         transmissionStatus = findViewById(R.id.transmissionStatus)
         startButton = findViewById(R.id.startButton)
         stopButton = findViewById(R.id.stopButton)
@@ -135,13 +135,13 @@ class MainActivity : AppCompatActivity() {
             }
 
             val totalPatterns = irPatterns.sumOf { it.patterns.size } + irPatterns.size
-            patternsCountText.text = getString(R.string.patterns_loaded, totalPatterns)
+            transmissionStatus.text = getString(R.string.patterns_loaded, totalPatterns)
             progressBar.max = totalPatterns
         } catch (e: IOException) {
             e.printStackTrace()
             Toast.makeText(this, "Failed to load IR patterns", Toast.LENGTH_LONG).show()
             irPatterns = emptyList()
-            patternsCountText.text = getString(R.string.patterns_loaded, 0)
+            transmissionStatus.text = getString(R.string.patterns_loaded, 0)
         }
     }
 
@@ -194,7 +194,7 @@ class MainActivity : AppCompatActivity() {
                         withContext(Dispatchers.Main) {
                             currentProgress++
                             progressBar.progress = currentProgress
-                            patternsCountText.text = getString(R.string.patterns_loaded, progressBar.max)
+                            transmissionStatus.text = getString(R.string.patterns_loaded, progressBar.max)
                         }
                     } catch (e: Exception) {
                         withContext(Dispatchers.Main) {
