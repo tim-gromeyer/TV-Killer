@@ -14,6 +14,9 @@ import android.widget.ProgressBar
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
+import com.google.android.gms.ads.AdRequest
+import com.google.android.gms.ads.AdView
+import com.google.android.gms.ads.MobileAds
 import com.google.gson.Gson
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -33,6 +36,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var stopButton: Button
     private lateinit var startButton: Button
     private var transmissionJob: Job? = null
+    private lateinit var adView: AdView
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -46,6 +50,12 @@ class MainActivity : AppCompatActivity() {
         stopButton = findViewById(R.id.stopButton)
         stopButton.isEnabled = false // Initially disabled
         startButton.isEnabled = false // Initially disabled until blaster is ready
+
+        // Initialize AdMob
+        MobileAds.initialize(this) {}
+        adView = findViewById(R.id.adView)
+        val adRequest = AdRequest.Builder().build()
+        adView.loadAd(adRequest)
 
         // Load patterns from JSON file
         loadPatternsFromJson()
