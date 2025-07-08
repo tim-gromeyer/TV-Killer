@@ -9,14 +9,15 @@ import android.hardware.usb.UsbManager
 import android.os.Build
 import android.os.Bundle
 import android.view.View
-import android.widget.Button
-import android.widget.ProgressBar
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 import com.google.android.gms.ads.AdRequest
 import com.google.android.gms.ads.AdView
 import com.google.android.gms.ads.MobileAds
+import com.google.android.material.button.MaterialButton
+import com.google.android.material.progressindicator.LinearProgressIndicator
 import com.google.gson.Gson
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -30,11 +31,11 @@ class MainActivity : AppCompatActivity() {
     private var irBlaster: IrBlaster? = null
     private lateinit var usbBroadCastReceiver: BroadcastReceiver
     private lateinit var irPatterns: List<IrPattern>
-    private lateinit var progressBar: ProgressBar
+    private lateinit var progressBar: LinearProgressIndicator
     private lateinit var patternsCountText: TextView
     private lateinit var transmissionStatus: TextView
-    private lateinit var stopButton: Button
-    private lateinit var startButton: Button
+    private lateinit var stopButton: MaterialButton
+    private lateinit var startButton: MaterialButton
     private var transmissionJob: Job? = null
     private lateinit var adView: AdView
 
@@ -73,7 +74,7 @@ class MainActivity : AppCompatActivity() {
             progressBar.visibility = View.GONE
         }
 
-        usbBroadCastReceiver = registerReceivers() // Make sure this is only called once
+        registerReceivers() // Make sure this is only called once
         initBlaster()
     }
 
@@ -218,23 +219,16 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    @SuppressLint("UnspecifiedRegisterReceiverFlag")
-    private fun registerReceivers(): BroadcastReceiver {
-        val usbBroadCastReceiver = getUsbBroadCastReceiver()
+    private fun registerReceivers() {
+        usbBroadCastReceiver = getUsbBroadCastReceiver()
         val intentFilters = arrayOf(
             IntentFilter(UsbManager.ACTION_USB_DEVICE_ATTACHED),
             IntentFilter(UsbManager.ACTION_USB_DEVICE_DETACHED)
-            // Removed ACTION_USB_PERMISSION since it's handled in TiqiaaUsbDriver
         )
 
         intentFilters.forEach { filter ->
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                registerReceiver(usbBroadCastReceiver, filter, RECEIVER_NOT_EXPORTED)
-            } else {
-                registerReceiver(usbBroadCastReceiver, filter)
-            }
+            ContextCompat.registerReceiver(this, usbBroadCastReceiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
         }
-        return usbBroadCastReceiver
     }
 
     private fun getUsbBroadCastReceiver() = object : BroadcastReceiver() {

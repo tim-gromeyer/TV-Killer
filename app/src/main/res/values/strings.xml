@@ -1,7 +1,7 @@
 <resources>
     <string name="app_name">TV-Killer</string>
-    <string name="patterns_loaded">Patterns loaded: %ds</string>
-    <string name="packet_number">Send packet number %ds, took %ds ms</string>
+    <string name="patterns_loaded">Patterns loaded: %1$d</string>
+    <string name="packet_number">Send packet number %1$d, took %2$d ms</string>
     <string name="completed_all_patterns">Completed all %1$d patterns in %2$dms</string>
     <string name="stop">Stop</string>
     <string name="transmit">Transmit</string>
