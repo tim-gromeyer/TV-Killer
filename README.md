@@ -27,4 +27,4 @@ Whether you’re pranking your buddies during a movie night or testing your IR s
 
 ---
 
-*Keywords: TV-Killer, TV prank app, Android IR blaster, turn off TV app, trolling app, modern TV-Kill, dark mode app, simple UI app*
+*Keywords: TV-Killer, TV prank app, Android IR blaster, turn off TV app, trolling app, modern TV-Kill, dark mode app, simple UI app, tv-b-gone app, tv-b-gone android*
